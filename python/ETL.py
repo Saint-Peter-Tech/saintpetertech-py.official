@@ -171,11 +171,19 @@ def trusted(df):
     maxRAM = df_last["ram_percent"].max()
     maxDISK = df_last["disk_usage_percent"].max()
 
-    bandaLarga = round(
-        (df_last["bytes_sent_per_sec"].max() +
-         df_last["bytes_recv_per_sec"].max()) * 8 / 1_000_000,
-        2
-    )
+    mincpuporcentagem = df_last["cpu_percent"].min()
+    minramporcentagem = df_last["ram_percent"].min()
+    ultimacapturacpu = df_last["cpu_percent"].iloc[-1]
+    ultimacapturaram = df_last["ram_percent"].iloc[-1]
+
+    somaRede = ((df_last["bytes_sent_per_sec"] +
+             df_last["bytes_recv_per_sec"]) * 8 / 1_000_000).round(2)
+
+    minredeMBS = somaRede.min()
+    ultimacapturarede = somaRede.iloc[-1]
+    bandaLarga = somaRede.max()
+
+    kpi_rede_zero = (somaRede <= 0.01).sum()
 
     # Pega o ultimo registro do DF
     ultimo = df_last.iloc[-1]
@@ -186,9 +194,16 @@ def trusted(df):
         "horarioInicio": horarioInicio,
         "horarioFim": horarioFim,
         "maxCPU": maxCPU,
+        "mincpuporcentagem": mincpuporcentagem,
+        "minramporcentagem": minramporcentagem,
+        "ultimacapturacpu": ultimacapturacpu,
+        "ultimacapturaram": ultimacapturaram,
         "maxRAM": maxRAM,
         "maxDISK": maxDISK,
-        "bandaLarga": bandaLarga
+        "minredeMBS": minredeMBS,
+        "ultimacapturarede": ultimacapturarede,
+        "bandaLarga": bandaLarga,
+        "kpi_rede_zero": kpi_rede_zero
     }
 
     # Adiciona os Status dinamicamente com for
@@ -254,6 +269,12 @@ def client(df, cursor):
         ram = row["maxRAM"]
         disk = row["maxDISK"]
         rede = row["bandaLarga"]
+        mincpu = row["mincpuporcentagem"]
+        minram = row["minramporcentagem"]
+        ultcpu = row["ultimacapturacpu"]
+        ultram = row["ultimacapturaram"]
+        minrede = row["minredeMBS"]
+        ultrede = row["ultimacapturarede"]
 
         # Função para definir o status do monitor
         def status(valor, limite):
@@ -277,6 +298,7 @@ def client(df, cursor):
         # Gerá quantidade de modulos ativos e se o monitor está ativo
         qtd_modulos_ativos = sum(row[col] == "Ativo" for col in status_cols)
         monitor_ativo = qtd_modulos_ativos > 0
+        kpi_rede_zero = int(row["kpi_rede_zero"])
 
         # Cria status geral com base em como está cada componente
         if "Crítico" in [statuscpu, statusram, statusdisco, statusrede]:
@@ -295,6 +317,12 @@ def client(df, cursor):
             "picocpuporcentagem": cpu,
             "picoramporcentagem": ram,
             "picodiscoporcentagem": disk,
+            "mincpuporcentagem": mincpu,
+            "minramporcentagem": minram,
+            "ultimacapturacpu": ultcpu,
+            "ultimacapturaram": ultram,
+            "minredeMBS": minrede,
+            "ultimacapturarede": ultrede,
             "redeMBS": rede,
             "statusgeral": statusgeral,
             "statusram": statusram,
@@ -302,7 +330,12 @@ def client(df, cursor):
             "statusdisco": statusdisco,
             "statusrede": statusrede,
             "monitorativo": monitor_ativo,
-            "qtdmodulosativos": qtd_modulos_ativos
+            "qtdmodulosativos": qtd_modulos_ativos,
+            "kpi_rede_zero": kpi_rede_zero,
+            "modulos": {
+            col: row[col] for col in status_cols
+            },
+
         })
 
     # Vai para o começo do Buffer e Limpa
