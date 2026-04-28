@@ -1,0 +1,2 @@
+id_monitor,timestamp,cpu_percent,ram_percent,disk_usage_percent,bytes_sent_per_sec,bytes_recv_per_sec,bpm_status,pa_status,spo2_status,resp_status,temperatura_status,pic_status,pvc_status,ecg_status,etco2_status
+1,27-04-2026 21_45_29,46.54939216477053,83.23049941702126,71.5,2677.4419884009944,1619.8213421706712,Ativo,Ativo,Ativo,Ativo,Inativo,Inativo,Inativo,Ativo,Ativo

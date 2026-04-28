@@ -1,4 +1,4 @@
-df_grupo <- rbind.data.frame(M6, M1)
+df_grupo <- rbind.data.frame(teste, teste2)
 
 df_grupo$modulos_ativos <- 
   (df_grupo$bpm_status == "Ativo") +

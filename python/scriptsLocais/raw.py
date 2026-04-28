@@ -9,7 +9,6 @@ from random import randint
 import sys
 import os
 
-random.seed(42)
 
 
 # Importando Bibliotecas Necessárias:
@@ -266,7 +265,7 @@ try:
         inicio = time.time()
 
         # Gera um intervalo aleatorio para troca de módulos
-        intervalo = 450
+        intervalo = randint(300, 600)
 
         while time.time() - inicio < intervalo:
             # Início do loop infinito para captura contínua dos dados do sistema:

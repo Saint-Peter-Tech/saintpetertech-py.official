@@ -1,0 +1,8 @@
+id_monitor,timestamp,cpu_percent,ram_percent,disk_usage_percent,bytes_sent_per_sec,bytes_recv_per_sec,bpm_status,pa_status,spo2_status,resp_status,temperatura_status,pic_status,pvc_status,ecg_status,etco2_status
+1,27-04-2026 21_32_14,56.7,80,71.5,24598.264888152444,12486.446396023199,Ativo,Ativo,Ativo,Ativo,Inativo,Inativo,Inativo,Ativo,Ativo
+1,27-04-2026 21_33_20,35.5,80,71.6,1688.1551284175644,24200.341375310687,Ativo,Ativo,Ativo,Ativo,Inativo,Inativo,Inativo,Ativo,Ativo
+1,27-04-2026 21_34_26,37.8,80,71.6,110.95612261806131,898.3477050538527,Ativo,Ativo,Ativo,Ativo,Inativo,Inativo,Inativo,Ativo,Ativo
+1,27-04-2026 21_35_32,39.1,80,71.6,18103.62167357084,11047.295443247722,Ativo,Ativo,Ativo,Ativo,Inativo,Inativo,Inativo,Ativo,Ativo
+1,27-04-2026 21_36_38,38.7,75,71.6,13807.221143330573,6561.596520298261,Ativo,Ativo,Ativo,Ativo,Inativo,Inativo,Inativo,Ativo,Ativo
+1,27-04-2026 21_37_44,44.9,75,71.6,25182.0355923778,9056.2973985087,Ativo,Ativo,Ativo,Ativo,Inativo,Inativo,Inativo,Ativo,Ativo
+1,27-04-2026 21_38_50,44.3,80,71.6,205.86415907207956,920.7805136702569,Ativo,Ativo,Ativo,Ativo,Inativo,Inativo,Inativo,Ativo,Ativo
