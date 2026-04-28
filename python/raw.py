@@ -246,7 +246,7 @@ try:
 
         # Cria o arquivo CSV com apenas o cabeçalho caso ele ainda não exista.
 
-        print("Iniciando ciclo de capturas (10 registros)")
+        print("Iniciando ciclo de capturas (10 registros)\n")
         while contador <= 10:
             # Início do loop infinito para captura contínua dos dados do sistema:
 
@@ -335,7 +335,9 @@ try:
             # Salva os dados no CSV no modo append (sem sobrescrever o arquivo);
             df.to_csv(buffer_csv, mode='a', header=False, index=False)
 
-            print(f"Captura {contador} CPU= {cpu:.2f}% RAM= {ram:.2f}% Ativos= {len(atuais)}")
+            redeTotal = bytes_sent_per_sec + bytes_recv_per_sec
+
+            print(f"Captura {contador} CPU = {cpu:.2f}% | RAM = {ram:.2f}% | DISK = {mem.percent:.2f}% | REDE = {redeTotal:.2f}kbps | Ativos = {len(atuais)}")
 
             time.sleep(60)
             # Aguarda mais 60 segundos antes da próxima coleta (controle de frequência).
@@ -365,9 +367,9 @@ try:
             ContentType='text/csv'
         )
 
-        print(f"Upload concluído: {nome_arquivo}")
+        print(f"Upload concluído: {nome_arquivo}\n")
 
-        print("Iniciando processo ETL...")
+        print("Iniciando processo ETL...\n")
 
         # Chamando a ETL
         subprocess.run([sys.executable, "ETL.py"], check=True)
