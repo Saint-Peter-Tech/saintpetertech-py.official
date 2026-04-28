@@ -7,6 +7,7 @@ import boto3
 from botocore.exceptions import ClientError
 import logging
 from io import StringIO
+from datetime import datetime, timedelta, date, time
 
 print("Iniciando ETL...")
 
@@ -18,9 +19,11 @@ print("Iniciando ETL...")
 # json = Criar arquivos .json para melhor manipulação no Front;
 # boto3 = Interagir com a AWS (s3);
 # logging = Debug e registrar erros;
-# stringIO = Cria arquivos na memoria para enviar ao S3.
+# stringIO = Cria arquivos na memoria para enviar ao S3;
+# datetime = Transformar em horas e pegar diferenças com mais facilidade.
 
 # Arquivo de controle para saber o momento de criar o Client
+
 controleArquivo = "./controle.txt"
 
 # Criando espaço para CSV na mémoria
@@ -160,7 +163,8 @@ def trusted(df):
         return
 
     # Pega o pico de cada coisa dos ultimos 10minutos
-    horario = df_last["timestamp"].max()
+    horarioInicio = df_last["timestamp"].min()
+    horarioFim = df_last["timestamp"].max()
     idMonitor = df_last["id_monitor"].iloc[-1]
 
     maxCPU = df_last["cpu_percent"].max()
@@ -179,7 +183,8 @@ def trusted(df):
     # Monta dicionario de Registros
     registro = {
         "idMonitor": idMonitor,
-        "horario": horario,
+        "horarioInicio": horarioInicio,
+        "horarioFim": horarioFim,
         "maxCPU": maxCPU,
         "maxRAM": maxRAM,
         "maxDISK": maxDISK,
@@ -235,6 +240,11 @@ def client(df, cursor):
     for _, row in df_client.iterrows():
         # Pega o id do monitor da linha e transforma em int
         id_monitor = int(row["idMonitor"])
+        # intervalo = ((datetime.strptime(str(row["horarioFim"]), "%Y-%m-%d %H:%M:%S").date()) - (datetime.strptime(str(row["horarioInicio"]), "%Y-%m-%d %H:%M:%S").date())).total_seconds()
+        intervalo = round(((datetime.strptime(str(row["horarioFim"]), "%Y-%m-%d %H:%M:%S")) - (datetime.strptime(str(row["horarioInicio"]), "%Y-%m-%d %H:%M:%S"))).total_seconds() / 60, 2)
+        # intervalo = (datetime.strptime(str(row["horarioFim"]), "%Y-%m-%d %H:%M:%S"))
+        horarioInicio = str(row["horarioInicio"])
+        horarioFim = str(row["horarioFim"])
 
         # Busca os limites do banco com base no id do monitor e o cursor informado anteriormente
         limites = buscar_limites(cursor, id_monitor)
@@ -269,9 +279,9 @@ def client(df, cursor):
         monitor_ativo = qtd_modulos_ativos > 0
 
         # Cria status geral com base em como está cada componente
-        if "Crítico" in [statuscpu, statusram, statusdisco]:
+        if "Crítico" in [statuscpu, statusram, statusdisco, statusrede]:
             statusgeral = "Crítico"
-        elif "Alerta" in [statuscpu, statusram, statusdisco]:
+        elif "Alerta" in [statuscpu, statusram, statusdisco, statusrede]:
             statusgeral = "Alerta"
         else:
             statusgeral = "OK"
@@ -279,9 +289,12 @@ def client(df, cursor):
         # Cria a base do json de resultado
         resultado.append({
             "idmonitor": id_monitor,
-            "cpuporcentagem": cpu,
-            "ramporcentagem": ram,
-            "discoporcentagem": disk,
+            "horarioInicio": horarioInicio,
+            "HorarioFim": horarioFim,
+            "intervalomin": intervalo,
+            "picocpuporcentagem": cpu,
+            "picoramporcentagem": ram,
+            "picodiscoporcentagem": disk,
             "redeMBS": rede,
             "statusgeral": statusgeral,
             "statusram": statusram,
@@ -299,7 +312,21 @@ def client(df, cursor):
     # Cria o Json
     json.dump(resultado, buffer_client, indent=4, ensure_ascii=False)
 
-    s3.put_object(Bucket=bucket, Key='client/client.json', Body=buffer_client.getvalue())
+    # Baixando o Client do S3 caso exista para incrementar e enviar
+    try:
+        response = s3.get_object(Bucket=bucket, Key='client/client.json')
+        conteudo = response['Body'].read().decode('utf-8')
+        df_existente = pd.read_json(StringIO(conteudo))
+        json_antigo = json.loads(conteudo)
+        json_novo = json.loads(buffer_client.getvalue())
+        jsonFinal = json.dumps(json_antigo + json_novo, indent=4, ensure_ascii=False)
+
+    except s3.exceptions.NoSuchKey:
+            # Primeira execução
+            jsonFinal = buffer_client.getvalue()
+
+
+    s3.put_object(Bucket=bucket, Key='client/client.json', Body=str(jsonFinal))
 
     print("Client atualizado no S3")
 
