@@ -11,6 +11,7 @@ import os
 
 random.seed(42)
 
+
 # Importando Bibliotecas Necessárias:
 # psutil = Captura de Hardware e processos;
 # time = Delay nas capturas para melhor análise e possibilidades;
@@ -264,16 +265,10 @@ try:
         # Pega o inicio do While
         inicio = time.time()
 
-<<<<<<< HEAD
         # Gera um intervalo aleatorio para troca de módulos
         intervalo = 450
 
         while time.time() - inicio < intervalo:
-=======
-        contador = 1
-
-        while contador <= 10:
->>>>>>> cb62b79c14cf0a606b119fcf47b1d069939c7e23
             # Início do loop infinito para captura contínua dos dados do sistema:
 
             mem = psutil.disk_usage('/')
@@ -325,7 +320,6 @@ try:
             carga = peso_hora[datetime.now().hour] / 12.07
             bytes_sent_per_sec = bytes_sent_per_sec * (1.0 - carga * 0.4)
             bytes_recv_per_sec = bytes_recv_per_sec * (1.0 - carga * 0.4)
-<<<<<<< HEAD
             for atual in atuais:
                 if(cpu < 80):
                     cpu += 5
@@ -335,22 +329,6 @@ try:
                     ram += 5
                 else:
                     ram = 75
-=======
-
-            n_ativos = len(atuais)
-
-            incremento_ram = n_ativos * randint(2, 4)
-            if ram + incremento_ram < 85:
-                ram += incremento_ram
-            else:
-                ram = randint(70,80)
-
-            incremento_cpu = n_ativos * randint(2, 4)
-            if cpu + incremento_cpu <85:
-                cpu += incremento_cpu
-            else:
-                cpu = randint(70, 80)
->>>>>>> cb62b79c14cf0a606b119fcf47b1d069939c7e23
 
             # Cria uma lista com os dados coletados
             linha = [
@@ -373,11 +351,8 @@ try:
             # Salva os dados no CSV no modo append (sem sobrescrever o arquivo);
             df.to_csv(arquivoCSV, mode='a', header=False, index=False, encoding='utf-8')
 
-            # Aguarda mais 60 segundos antes da próxima coleta (controle de frequência).
             time.sleep(60)
-
-            contador += 1
-            
+            # Aguarda mais 60 segundos antes da próxima coleta (controle de frequência).
 
 except KeyboardInterrupt:
     print("Encerrando Monitoramento...")
