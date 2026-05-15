@@ -153,7 +153,7 @@ FROM monitores m
 JOIN unidades u ON m.fk_unidade = u.id_unidade
 JOIN hospitais h ON u.fk_hospital = h.id_hospital
 JOIN modelos mm ON m.fk_modelo = mm.id_modelo
-WHERE m.fk_empresa = %s
+WHERE m.fk_empresa = %s AND m.status_monitor = 'Inativo';
 """
 
 # Cursor passando o fk_empresa
@@ -523,7 +523,7 @@ try:
 
             print("=" * 60)
 
-            time.sleep(1)
+            time.sleep(60)
             # Aguarda mais 60 segundos antes da próxima coleta (controle de frequência).
 
             contador += 1
@@ -554,9 +554,6 @@ try:
         print(f"Upload concluído: {nome_arquivo}\n")
 
         print("Iniciando processo ETL...\n")
-
-        # Chamando a ETL
-        subprocess.run([sys.executable, "ETL.py"], check=True)
 
         
 
