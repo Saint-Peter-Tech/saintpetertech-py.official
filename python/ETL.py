@@ -289,7 +289,7 @@ def client(df, cursor):
         minrede = row["minredeMBS"]
         ultrede = row["ultimacapturarede"]
         diskUsed = row["diskUsed"]
-        diskTotal = row["discoTotal"]
+        diskTotal = row["diskTotal"]
         upload = row["upload"]
         download = row["download"]
         trafegoTotal = row["trafegoTotal"]
