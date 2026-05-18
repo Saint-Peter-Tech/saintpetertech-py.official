@@ -41,7 +41,8 @@ header = [
     "timestamp",
     "cpu_percent",
     "ram_percent",
-    "disk_usage_percent",
+    "disk_used",
+    "disk_total",
     "bytes_sent_per_sec",
     "bytes_recv_per_sec",
     "bpm_status",
@@ -369,8 +370,11 @@ def coletar_componentes(componentes):
         try:
             resultado = eval(f"psutil.{comando}")
 
-            if nome == "Disco":
-                dados["disk_usage_percent"] = resultado.percent
+            if nome == "Disco_Usado":
+                dados["disk_used"] = resultado
+                
+            elif nome == "Disco_Total":
+                dados["disk_total"] = resultado
 
             elif nome == "CPU":
                 dados["cpu_percent"] = resultado
@@ -412,7 +416,8 @@ try:
 
             cpu = dados_componentes.get("cpu_percent", 0)
             ram = dados_componentes.get("ram_percent", 0)
-            disk = dados_componentes.get("disk_usage_percent", 0)
+            disk_used = dados_componentes.get("disk_used", 0)
+            disk_total = dados_componentes.get("disk_total", 0)
 
             date = datetime.now().strftime('%d-%m-%Y %H_%M_%S')
             # Captura o timestamp atual da coleta formatado;
@@ -480,7 +485,8 @@ try:
                 date,
                 round(cpu, 2),
                 round(ram, 2),
-                round(disk, 2),
+                round(disk_used, 2),
+                round(disk_total, 2),
                 round(bytes_sent_per_sec, 2),
                 round(bytes_recv_per_sec, 2),
             ]
@@ -509,10 +515,11 @@ try:
 
             print("-" * 60)
 
-            print(f"CPU        : {cpu:.2f}%")
-            print(f"RAM        : {ram:.2f}%")
-            print(f"DISCO      : {disk:.2f}%")
-            print(f"BROADBAND  : {redeTotal:.2f} mb/s")
+            print(f"CPU         : {cpu:.2f}%")
+            print(f"RAM         : {ram:.2f}%")
+            print(f"DISCO       : {disk_used:.2f}%")
+            print(f"DISCO TOTAL : {disk_total:.2f}%")
+            print(f"BROADBAND   : {redeTotal:.2f} mb/s")
 
             print("-" * 60)
 

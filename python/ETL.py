@@ -169,7 +169,7 @@ def trusted(df):
 
     maxCPU = df_last["cpu_percent"].max()
     maxRAM = df_last["ram_percent"].max()
-    maxDISK = df_last["disk_usage_percent"].max()
+    maxDISK = df_last["disk_used"].max()
 
     mincpuporcentagem = df_last["cpu_percent"].min()
     minramporcentagem = df_last["ram_percent"].min()
@@ -182,6 +182,14 @@ def trusted(df):
     minredeMBS = somaRede.min()
     ultimacapturarede = somaRede.iloc[-1]
     bandaLarga = somaRede.max()
+    #Calculos Download e Upload
+    download = df_last["bytes_sent_per_sec"].iloc[-1] - df_last["bytes_sent_per_sec"].iloc[-2]
+    upload = df_last["bytes_recv_per_sec"].iloc[-1] - df_last["bytes_recv_per_sec"].iloc[-2]
+    trafegoTotal = download + upload
+    
+    #Disco
+    discoUsado = df_last["disk_used"]
+    discoTotal = df_last["disk_total"]
 
     kpi_rede_zero = (somaRede <= 0.01).sum()
 
@@ -203,7 +211,12 @@ def trusted(df):
         "minredeMBS": minredeMBS,
         "ultimacapturarede": ultimacapturarede,
         "bandaLarga": bandaLarga,
-        "kpi_rede_zero": kpi_rede_zero
+        "kpi_rede_zero": kpi_rede_zero,
+        "diskUsed": discoUsado,
+        "diskTotal": discoTotal,
+        "download": download,
+        "upload": upload,
+        "trafegoTotal": trafegoTotal
     }
 
     # Adiciona os Status dinamicamente com for
@@ -275,6 +288,11 @@ def client(df, cursor):
         ultram = row["ultimacapturaram"]
         minrede = row["minredeMBS"]
         ultrede = row["ultimacapturarede"]
+        diskUsed = row["diskUsed"]
+        diskTotal = row["discoTotal"]
+        upload = row["upload"]
+        download = row["download"]
+        trafegoTotal = row["trafegoTotal"]
 
         # Função para definir o status do monitor
         def status(valor, limite):
@@ -339,7 +357,8 @@ def client(df, cursor):
         },
 
         "disco": {
-            "picoPorcentagem": disk,
+            "discoUsado": diskUsed,
+            "discoTotal": diskTotal,
             "status": statusdisco
         },
 
@@ -348,7 +367,10 @@ def client(df, cursor):
             "minimoMbs": minrede,
             "ultimaCaptura": ultrede,
             "status": statusrede,
-            "quedasRede": kpi_rede_zero
+            "quedasRede": kpi_rede_zero,
+            "download": download,
+            "upload": upload,
+            "trafegoTotal": trafegoTotal
         },
 
         "modulos": {
@@ -377,6 +399,7 @@ def client(df, cursor):
         "client/maria.json": {
 
             # Esse é seu JSON!
+            
 
         },
         "client/pedro.json": {
