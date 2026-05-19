@@ -535,7 +535,7 @@ try:
 
             contador += 1
 
-        print("\nFinalizando as 10 capturas, preparando envio\n")
+        print("\nFinalizando as 20 capturas, preparando envio\n")
 
         # Envia para o S3
         s3_client = boto3.client(

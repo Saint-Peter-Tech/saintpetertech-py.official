@@ -161,10 +161,20 @@ def trusted(df):
         "bytes_recv_per_sec"
     ])
 
+    hoje = datetime.now()
+
+    key = (
+    f"trusted/"
+    f"{hoje.year}/"
+    f"{hoje.month:02d}/"
+    f"{hoje.day:02d}/"
+    f"trusted.csv"
+    )
+
     try:
         response = s3.get_object(
             Bucket=bucket,
-            Key='trusted/trusted.csv'
+            Key=key
         )
 
         conteudo = response['Body'].read().decode('utf-8')
@@ -176,6 +186,10 @@ def trusted(df):
             ignore_index=True
         )
 
+        df_trusted = df_trusted.drop_duplicates(
+        subset=["id_monitor", "timestamp"]
+        )
+
     except Exception:
         df_trusted = df
 
@@ -185,7 +199,7 @@ def trusted(df):
 
     s3.put_object(
         Bucket=bucket,
-        Key='trusted/trusted.csv',
+        Key=key,
         Body=buffer.getvalue()
     )
 
@@ -196,7 +210,14 @@ def trusted(df):
 def client(df, cursor):
     print("Processando camada Client...\n")
 
+    id_monitor = int(df["id_monitor"].iloc[-1])
+
     df_client = preparar_raw(df)
+
+    df_client = df_client[
+        df_client["id_monitor"] == id_monitor
+    ]
+
     df_client = df_client.tail(20)
 
     if df_client.empty:
