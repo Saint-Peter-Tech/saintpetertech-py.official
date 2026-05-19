@@ -409,7 +409,7 @@ try:
         # Cria o arquivo CSV com apenas o cabeçalho caso ele ainda não exista.
 
         print("Iniciando ciclo de capturas (10 registros): \n")
-        while contador <= 10:
+        while contador <= 20:
             # Início do loop infinito para captura contínua dos dados do sistema:
 
             dados_componentes = coletar_componentes(componentes_monitor)
