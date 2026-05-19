@@ -42,7 +42,7 @@ paginator = s3.get_paginator('list_objects_v2')
 registros = []
 
 for page in paginator.paginate(Bucket=bucket, Prefix="raw/"):
-    for obj in page["Contents"]:
+    for obj in page.get("Contents", []):
         chave = obj["Key"]
         response = s3.get_object(Bucket=bucket, Key=chave)
         registros.append({"conteudo": response})
@@ -87,18 +87,41 @@ def buscar_limites(cursor, id_monitor):
 
     return limites
 
+def buscar_hierarquia_monitor(cursor, id_monitor):
+    query = """
+        SELECT
+            m.id_monitor,
+            m.fk_empresa,
+            u.id_unidade,
+            h.id_hospital,
+            e.razao_social,
+            h.nome_hospital,
+            u.nome_unidade
+        FROM monitores m
+        JOIN unidades u
+            ON m.fk_unidade = u.id_unidade
+        JOIN hospitais h
+            ON u.fk_hospital = h.id_hospital
+        JOIN empresas e
+            ON m.fk_empresa = e.id_empresa
+        WHERE m.id_monitor = %s
+    """
 
-def ler_controle():
-    if not os.path.exists(controleArquivo):
-        return 0
-    with open(controleArquivo, "r") as f:
-        return int(f.read())
+    cursor.execute(query, (id_monitor,))
+    resultado = cursor.fetchone()
 
+    if not resultado:
+        return None
 
-def salvar_controle(valor):
-    with open(controleArquivo, "w") as f:
-        f.write(str(valor))
-
+    return {
+        "id_monitor": resultado[0],
+        "id_empresa": resultado[1],
+        "id_unidade": resultado[2],
+        "id_hospital": resultado[3],
+        "empresa": resultado[4],
+        "hospital": resultado[5],
+        "unidade": resultado[6]
+    }
 
 def preparar_raw(df):
     df = df.copy()
@@ -111,84 +134,53 @@ def preparar_raw(df):
     df = df.sort_values(["id_monitor", "timestamp"])
     return df
 
-
 def trusted(df):
     print("Processando camada TRUSTED...")
+
     df = preparar_raw(df)
 
-    df_last = df.tail(10)
-
-    if df_last.empty:
+    if df.empty:
         print("Sem dados para trusted")
-        return
+        return pd.DataFrame()
 
-    horarioInicio = df_last["timestamp"].min()
-    horarioFim = df_last["timestamp"].max()
-    idMonitor = df_last["id_monitor"].iloc[-1]
+    df["upload_mbps"] = (
+        df["bytes_sent_per_sec"] * 8 / 1_000_000
+    ).round(4)
 
-    maxCPU = df_last["cpu_percent"].max()
-    maxRAM = df_last["ram_percent"].max()
-    maxDISK = df_last["disk_used"].max()
+    df["download_mbps"] = (
+        df["bytes_recv_per_sec"] * 8 / 1_000_000
+    ).round(4)
 
-    mincpuporcentagem = df_last["cpu_percent"].min()
-    minramporcentagem = df_last["ram_percent"].min()
-    ultimacapturacpu = df_last["cpu_percent"].iloc[-1]
-    ultimacapturaram = df_last["ram_percent"].iloc[-1]
+    df["banda_larga"] = (
+        df["upload_mbps"] +
+        df["download_mbps"]
+    ).round(4)
 
-    somaRede = ((df_last["bytes_sent_per_sec"] +
-                 df_last["bytes_recv_per_sec"]) * 8 / 1_000_000).round(2)
-
-    minredeMBS = somaRede.min()
-    ultimacapturarede = somaRede.iloc[-1]
-    bandaLarga = somaRede.max()
-
-    download = df_last["bytes_sent_per_sec"].iloc[-1] - df_last["bytes_sent_per_sec"].iloc[-2]
-    upload = df_last["bytes_recv_per_sec"].iloc[-1] - df_last["bytes_recv_per_sec"].iloc[-2]
-    trafegoTotal = download + upload
-
-    discoUsado = float(df_last["disk_used"].iloc[-1])
-    discoTotal = float(df_last["disk_total"].iloc[-1])
-
-    kpi_rede_zero = (somaRede <= 0.01).sum()
-
-    ultimo = df_last.iloc[-1]
-
-    registro = {
-        "idMonitor": idMonitor,
-        "horarioInicio": horarioInicio,
-        "horarioFim": horarioFim,
-        "maxCPU": maxCPU,
-        "mincpuporcentagem": mincpuporcentagem,
-        "minramporcentagem": minramporcentagem,
-        "ultimacapturacpu": ultimacapturacpu,
-        "ultimacapturaram": ultimacapturaram,
-        "maxRAM": maxRAM,
-        "maxDISK": maxDISK,
-        "minredeMBS": minredeMBS,
-        "ultimacapturarede": ultimacapturarede,
-        "bandaLarga": bandaLarga,
-        "kpi_rede_zero": kpi_rede_zero,
-        "diskUsed": discoUsado,
-        "diskTotal": discoTotal,
-        "download": download,
-        "upload": upload,
-        "trafegoTotal": trafegoTotal
-    }
-
-    for col in status_cols:
-        registro[col] = ultimo[col]
-
-    temp_trusted = pd.DataFrame([registro])
+    df = df.drop(columns=[
+        "bytes_sent_per_sec",
+        "bytes_recv_per_sec"
+    ])
 
     try:
-        response = s3.get_object(Bucket=bucket, Key='trusted/trusted.csv')
+        response = s3.get_object(
+            Bucket=bucket,
+            Key='trusted/trusted.csv'
+        )
+
         conteudo = response['Body'].read().decode('utf-8')
+
         df_existente = pd.read_csv(StringIO(conteudo))
-        df_trusted = pd.concat([df_existente, temp_trusted], ignore_index=True)
-    except s3.exceptions.NoSuchKey:
-        df_trusted = temp_trusted
+
+        df_trusted = pd.concat(
+            [df_existente, df],
+            ignore_index=True
+        )
+
+    except Exception:
+        df_trusted = df
 
     buffer = StringIO()
+
     df_trusted.to_csv(buffer, index=False)
 
     s3.put_object(
@@ -197,155 +189,191 @@ def trusted(df):
         Body=buffer.getvalue()
     )
 
-    print("Trusted atualizado no S3")
+    print("Trusted atualizado com sucesso")
 
     return df_trusted
 
-
 def client(df, cursor):
     print("Processando camada Client...\n")
-    df_client = df.tail(3)
+
+    df_client = preparar_raw(df)
+    df_client = df_client.tail(20)
 
     if df_client.empty:
         print("Sem dados")
         return
 
-    resultado = []
+    id_monitor = int(df_client["id_monitor"].iloc[-1])
 
-    for _, row in df_client.iterrows():
-        id_monitor = int(row["idMonitor"])
-        intervalo = round(((datetime.strptime(str(row["horarioFim"]), "%Y-%m-%d %H:%M:%S")) - (datetime.strptime(str(row["horarioInicio"]), "%Y-%m-%d %H:%M:%S"))).total_seconds() / 60, 2)
-        horarioInicio = str(row["horarioInicio"])
-        horarioFim = str(row["horarioFim"])
+    hierarquia = buscar_hierarquia_monitor(cursor, id_monitor)
 
-        limites = buscar_limites(cursor, id_monitor)
+    if not hierarquia:
+        print("Monitor não encontrado no banco")
+        return
 
-        cpu = row["maxCPU"]
-        ram = row["maxRAM"]
-        disk = row["maxDISK"]
-        rede = row["bandaLarga"]
-        mincpu = row["mincpuporcentagem"]
-        minram = row["minramporcentagem"]
-        ultcpu = row["ultimacapturacpu"]
-        ultram = row["ultimacapturaram"]
-        minrede = row["minredeMBS"]
-        ultrede = row["ultimacapturarede"]
-        diskUsed = float(row["diskUsed"])
-        diskTotal = float(row["diskTotal"])
-        upload = row["upload"]
-        download = row["download"]
-        trafegoTotal = row["trafegoTotal"]
+    id_empresa = hierarquia["id_empresa"]
+    id_hospital = hierarquia["id_hospital"]
+    id_unidade = hierarquia["id_unidade"]
+    
+    horarioInicio = str(df_client["timestamp"].min())
+    horarioFim = str(df_client["timestamp"].max())
 
-        def status(valor, limite):
-            if limite is None:
-                return "Sem limite definido"
-            if valor <= limite:
-                return "OK"
-            elif valor <= limite * 1.2:
-                return "Alerta"
-            return "Crítico"
+    intervalo = round(
+        (
+            df_client["timestamp"].max() -
+            df_client["timestamp"].min()
+        ).total_seconds() / 60,
+        2
+    )
 
-        limite_cpu = limites.get("cpu")
-        limite_ram = limites.get("ram")
-        limite_disk = limites.get("disco_usado")
-        limite_rede = limites.get("rede")
+    limites = buscar_limites(cursor, id_monitor)
 
-        statuscpu = status(cpu, limite_cpu)
-        statusram = status(ram, limite_ram)
-        statusdisco = status(disk, limite_disk)
-        statusrede = status(rede, limite_rede)
+    cpu = df_client["cpu_percent"].max()
+    mincpu = df_client["cpu_percent"].min()
+    ultcpu = df_client["cpu_percent"].iloc[-1]
 
-        qtd_modulos_ativos = sum(row[col] == "Ativo" for col in status_cols)
-        monitor_ativo = qtd_modulos_ativos > 0
-        kpi_rede_zero = int(row["kpi_rede_zero"])
+    ram = df_client["ram_percent"].max()
+    minram = df_client["ram_percent"].min()
+    ultram = df_client["ram_percent"].iloc[-1]
 
-        if "Crítico" in [statuscpu, statusram, statusdisco, statusrede]:
-            statusgeral = "Crítico"
-        elif "Alerta" in [statuscpu, statusram, statusdisco, statusrede]:
-            statusgeral = "Alerta"
-        else:
-            statusgeral = "OK"
+    disk = df_client["disk_used"].max()
 
-        resultado.append({
-            "monitor": {
-                "id": id_monitor,
-                "ativo": monitor_ativo,
-                "statusGeral": statusgeral,
-                "quantidadeModulosAtivos": qtd_modulos_ativos
-            },
-            "periodo": {
-                "inicio": horarioInicio,
-                "fim": horarioFim,
-                "intervaloMinutos": intervalo
-            },
-            "cpu": {
-                "picoPorcentagem": cpu,
-                "minimoPorcentagem": mincpu,
-                "ultimaCaptura": ultcpu,
-                "status": statuscpu
-            },
-            "ram": {
-                "picoPorcentagem": ram,
-                "minimoPorcentagem": minram,
-                "ultimaCaptura": ultram,
-                "status": statusram
-            },
-            "disco": {
-                "discoUsado": diskUsed,
-                "discoTotal": diskTotal,
-                "status": statusdisco
-            },
-            "rede": {
-                "picoMbs": rede,
-                "minimoMbs": minrede,
-                "ultimaCaptura": ultrede,
-                "status": statusrede,
-                "quedasRede": kpi_rede_zero,
-                "download": download,
-                "upload": upload,
-                "trafegoTotal": trafegoTotal
-            },
-            "modulos": {
-                col: row[col] for col in status_cols
-            }
-        })
+    rede = df_client["banda_larga"].max()
+    minrede = df_client["banda_larga"].min()
+    ultrede = df_client["banda_larga"].iloc[-1]
 
-    arquivos_client = {
-        "client/menegaldo.json": {},
-        "client/seiti.json": {},
-        "client/gustavo.json": {},
-        "client/maria.json": {},
-        "client/pedro.json": {
-            "monitoramento": resultado
-        },
-        "client/philipi.json": {}
+    upload = df_client["upload_mbps"].max()
+    download = df_client["download_mbps"].max()
+    trafego_total = df_client["banda_larga"].sum()
+
+    diskUsed = float(df_client["disk_used"].iloc[-1])
+    diskTotal = float(df_client["disk_total"].iloc[-1])
+
+    ultimo = df_client.iloc[-1]
+
+    qtd_modulos_ativos = 0
+
+    for col in status_cols:
+        if ultimo[col] == "Ativo":
+            qtd_modulos_ativos += 1
+
+    monitor_ativo = qtd_modulos_ativos > 0
+
+    kpi_rede_zero = (df_client["banda_larga"] <= 0.01).sum()
+
+    def status(valor, limite):
+        if limite is None:
+            return "Sem limite definido"
+        if valor <= limite:
+            return "OK"
+        elif valor <= limite * 1.2:
+            return "Alerta"
+        return "Crítico"
+
+    limite_cpu = limites.get("cpu")
+    limite_ram = limites.get("ram")
+    limite_disk = limites.get("disco_usado")
+    limite_rede = limites.get("rede")
+
+    statuscpu = status(cpu, limite_cpu)
+    statusram = status(ram, limite_ram)
+    statusdisco = status(disk, limite_disk)
+    statusrede = status(rede, limite_rede)
+
+    if "Crítico" in [statuscpu, statusram, statusdisco, statusrede]:
+        statusgeral = "Crítico"
+    elif "Alerta" in [statuscpu, statusram, statusdisco, statusrede]:
+        statusgeral = "Alerta"
+    else:
+        statusgeral = "OK"
+
+    resultado = {
+    "empresa": {
+        "id": id_empresa,
+        "nome": hierarquia["empresa"]
+    },
+
+    "hospital": {
+        "id": id_hospital,
+        "nome": hierarquia["hospital"]
+    },
+
+    "unidade": {
+        "id": id_unidade,
+        "nome": hierarquia["unidade"]
+    },
+
+    "monitor": {
+        "id": id_monitor,
+        "ativo": monitor_ativo,
+        "statusGeral": statusgeral,
+        "quantidadeModulosAtivos": qtd_modulos_ativos
+    },
+
+    "periodo": {
+        "inicio": horarioInicio,
+        "fim": horarioFim,
+        "intervaloMinutos": intervalo
+    },
+
+    "cpu": {
+        "picoPorcentagem": cpu,
+        "minimoPorcentagem": mincpu,
+        "ultimaCaptura": ultcpu,
+        "status": statuscpu
+    },
+
+    "ram": {
+        "picoPorcentagem": ram,
+        "minimoPorcentagem": minram,
+        "ultimaCaptura": ultram,
+        "status": statusram
+    },
+
+    "disco": {
+        "discoUsado": diskUsed,
+        "discoTotal": diskTotal,
+        "status": statusdisco
+    },
+
+    "rede": {
+        "picoMbs": rede,
+        "minimoMbs": minrede,
+        "ultimaCaptura": ultrede,
+        "uploadPicoMbs": upload,
+        "downloadPicoMbs": download,
+        "trafegoTotalMbs": trafego_total,
+        "status": statusrede,
+        "quedasRede": int(kpi_rede_zero)
+    },
+
+    "modulos": {
+        col: ultimo[col] for col in status_cols
     }
+}
 
-    for caminho, conteudo in arquivos_client.items():
-        try:
-            response = s3.get_object(Bucket=bucket, Key=caminho)
-            conteudo_antigo = response['Body'].read().decode('utf-8')
-            json_antigo = json.loads(conteudo_antigo)
-        except s3.exceptions.NoSuchKey:
-            json_antigo = {"monitoramento": []}
+    caminho = (
+    f"client/"
+    f"empresa_{id_empresa}/"
+    f"hospital_{id_hospital}/"
+    f"unidade_{id_unidade}/"
+    f"monitor_{id_monitor}.json"
+)
 
-        json_antigo["monitoramento"].extend(
-            conteudo.get("monitoramento", [])
-        )
+    json_final = json.dumps(
+        resultado,
+        indent=4,
+        ensure_ascii=False
+    )
 
-        json_final = json.dumps(
-            json_antigo,
-            indent=4,
-            ensure_ascii=False
-        )
+    s3.put_object(
+        Bucket=bucket,
+        Key=caminho,
+        Body=json_final
+    )
 
-        s3.put_object(
-            Bucket=bucket,
-            Key=caminho,
-            Body=json_final
-        )
-
-        print(f"{caminho} atualizado com sucesso")
+    print("CLIENT atualizado")
+    print(f"Arquivo: {caminho}")
 
     return resultado
 
@@ -359,18 +387,12 @@ def main():
 
     df_trusted = trusted(df_raw)
 
-    total_atual = len(df_trusted)
-    total_anterior = ler_controle()
+    conn = conectar()
+    cursor = conn.cursor()
+    client(df_trusted, cursor)
 
-    print(f"Controle -> atual: {total_atual} - anterior: {total_anterior}")
-
-    if total_atual - total_anterior >= 3:
-        conn = conectar()
-        cursor = conn.cursor()
-        client(df_trusted, cursor)
-        salvar_controle(total_atual)
-    else:
-        print("Aguardando mais dados...")
+    cursor.close()
+    conn.close()
 
 
 if __name__ == "__main__":

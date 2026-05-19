@@ -485,8 +485,8 @@ try:
                 date,
                 round(cpu, 2),
                 round(ram, 2),
-                round(disk_used, 2),
-                round(disk_total, 2),
+                round(disk_used, 0),
+                round(disk_total, 0),
                 round(bytes_sent_per_sec, 2),
                 round(bytes_recv_per_sec, 2),
             ]
@@ -510,16 +510,16 @@ try:
             print("=" * 60)
 
             print(f"Monitor: {id_monitor}")
-            print(f"Captura: {contador}/10")
+            print(f"Captura: {contador}/20")
             print(f"Horário: {date}")
 
             print("-" * 60)
 
             print(f"CPU         : {cpu:.2f}%")
             print(f"RAM         : {ram:.2f}%")
-            print(f"DISCO       : {disk_used:.2f}%")
-            print(f"DISCO TOTAL : {disk_total:.2f}%")
-            print(f"BROADBAND   : {redeTotal:.2f} mb/s")
+            print(f"DISCO       : {disk_used}bytes")
+            print(f"DISCO TOTAL : {disk_total}bytes")
+            print(f"BROADBAND   : {redeTotal:.2f}mb/s")
 
             print("-" * 60)
 
@@ -559,8 +559,6 @@ try:
         )
 
         print(f"Upload concluído: {nome_arquivo}\n")
-
-        print("Iniciando processo ETL...\n")
 
         
 
