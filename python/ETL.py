@@ -381,8 +381,23 @@ def client(df, cursor):
     f"monitor_{id_monitor}.json"
 )
 
-    json_final = json.dumps(
-        resultado,
+    try:
+        response = s3.get_object(
+            Bucket=bucket,
+            Key=caminho
+        )
+
+        conteudo = response['Body'].read().decode('utf-8')
+
+        json_existente = json.loads(conteudo)
+
+        json_final = json_existente + [resultado]
+
+    except Exception:
+        json_final = [resultado]
+
+    json_string = json.dumps(
+        json_final,
         indent=4,
         ensure_ascii=False
     )
@@ -390,7 +405,7 @@ def client(df, cursor):
     s3.put_object(
         Bucket=bucket,
         Key=caminho,
-        Body=json_final
+        Body=json_string
     )
 
     print("CLIENT atualizado")
