@@ -49,6 +49,10 @@ for page in paginator.paginate(Bucket=bucket, Prefix="raw/"):
 
 registros = sorted(registros, key=lambda x: x["conteudo"]["LastModified"], reverse=True)
 
+if not registros:
+    print("Nenhum RAW encontrado")
+    exit()
+
 raw = registros[0]["conteudo"]['Body'].read().decode('utf-8')
 
 print("RAW carregado com sucesso")
@@ -134,6 +138,79 @@ def preparar_raw(df):
     df = df.sort_values(["id_monitor", "timestamp"])
     return df
 
+def salvar_s3(caminho, novo_dado, tipo="json"):
+
+    if tipo == "json":
+
+        try:
+            response = s3.get_object(
+                Bucket=bucket,
+                Key=caminho
+            )
+
+            conteudo = response['Body'].read().decode('utf-8')
+
+            existente = json.loads(conteudo)
+
+            if isinstance(existente, list):
+                final = existente + [novo_dado]
+            else:
+                final = [existente, novo_dado]
+
+        except Exception:
+            final = [novo_dado]
+
+        json_string = json.dumps(
+            final,
+            indent=4,
+            ensure_ascii=False
+        )
+
+        s3.put_object(
+            Bucket=bucket,
+            Key=caminho,
+            Body=json_string
+        )
+
+    elif tipo == "csv":
+
+        try:
+            response = s3.get_object(
+                Bucket=bucket,
+                Key=caminho
+            )
+
+            conteudo = response['Body'].read().decode('utf-8')
+
+            df_existente = pd.read_csv(
+                StringIO(conteudo)
+            )
+
+            final = pd.concat(
+                [df_existente, novo_dado],
+                ignore_index=True
+            )
+
+            final = final.drop_duplicates(
+            subset=["id_monitor", "timestamp"]
+            )
+
+        except Exception:
+            final = novo_dado
+
+        buffer = StringIO()
+
+        final.to_csv(
+            buffer,
+            index=False
+        )
+
+        s3.put_object(
+            Bucket=bucket,
+            Key=caminho,
+            Body=buffer.getvalue()
+        )
+
 def trusted(df):
     print("Processando camada TRUSTED...")
 
@@ -161,6 +238,14 @@ def trusted(df):
         "bytes_recv_per_sec"
     ])
 
+    df["disk_used"] = (
+    df["disk_used"] / 1024**3
+    ).round(2)
+
+    df["disk_total"] = (
+    df["disk_total"] / 1024**3
+    ).round(2)
+
     hoje = datetime.now()
 
     key = (
@@ -171,41 +256,15 @@ def trusted(df):
     f"trusted.csv"
     )
 
-    try:
-        response = s3.get_object(
-            Bucket=bucket,
-            Key=key
-        )
-
-        conteudo = response['Body'].read().decode('utf-8')
-
-        df_existente = pd.read_csv(StringIO(conteudo))
-
-        df_trusted = pd.concat(
-            [df_existente, df],
-            ignore_index=True
-        )
-
-        df_trusted = df_trusted.drop_duplicates(
-        subset=["id_monitor", "timestamp"]
-        )
-
-    except Exception:
-        df_trusted = df
-
-    buffer = StringIO()
-
-    df_trusted.to_csv(buffer, index=False)
-
-    s3.put_object(
-        Bucket=bucket,
-        Key=key,
-        Body=buffer.getvalue()
+    salvar_s3(
+        caminho=key,
+        novo_dado=df,
+        tipo="csv"
     )
 
     print("Trusted atualizado com sucesso")
 
-    return df_trusted
+    return df
 
 def client(df, cursor):
     print("Processando camada Client...\n")
@@ -308,6 +367,8 @@ def client(df, cursor):
     else:
         statusgeral = "OK"
 
+    # EXEMPLO DE CSV:
+
     resultado = {
     "empresa": {
         "id": id_empresa,
@@ -372,44 +433,117 @@ def client(df, cursor):
         col: ultimo[col] for col in status_cols
     }
 }
+    
+    # Criando caminhos com base na função de Hierarquia:
 
-    caminho = (
-    f"client/"
-    f"empresa_{id_empresa}/"
-    f"hospital_{id_hospital}/"
-    f"unidade_{id_unidade}/"
-    f"monitor_{id_monitor}.json"
-)
-
-    try:
-        response = s3.get_object(
-            Bucket=bucket,
-            Key=caminho
-        )
-
-        conteudo = response['Body'].read().decode('utf-8')
-
-        json_existente = json.loads(conteudo)
-
-        json_final = json_existente + [resultado]
-
-    except Exception:
-        json_final = [resultado]
-
-    json_string = json.dumps(
-        json_final,
-        indent=4,
-        ensure_ascii=False
+    base_path = (
+        f"client/"
+        f"empresa_{id_empresa}/"
     )
 
-    s3.put_object(
-        Bucket=bucket,
-        Key=caminho,
-        Body=json_string
+    hospital_path = (
+        f"{base_path}"
+        f"hospital_{id_hospital}/"
+    )
+
+    unidade_path = (
+        f"{hospital_path}"
+        f"unidade_{id_unidade}/"
+    )
+
+    caminho_monitor = (
+        f"{unidade_path}"
+        f"monitor_{id_monitor}.json"
+    )
+
+    # Dash Philipi:
+
+    controle_json = {
+        "empresa": id_empresa,
+        "ultimaAtualizacao": str(datetime.now()),
+        "monitor": id_monitor
+    }
+
+    salvar_s3(
+        f"{base_path}controle.json",
+        controle_json,
+        tipo="json"
+    )
+
+    # Dash Diego Seiti:
+
+    modelos_json = {
+        "monitor": id_monitor
+    }
+
+    salvar_s3(
+        f"{base_path}modelos.json",
+        modelos_json,
+        tipo="json"
+    )
+
+    # Dash Pedro:
+
+    modulos_json = {
+        "monitor": id_monitor,
+        "modulos": {
+            col: ultimo[col]
+            for col in status_cols
+        }
+    }
+
+    salvar_s3(
+        f"{base_path}modulos.json",
+        modulos_json,
+        tipo="json"
+    )
+
+    # Dash Diego Henrique:
+
+    hospital_json = {
+        "id": id_hospital,
+        "nome": hierarquia["hospital"]
+    }
+
+    salvar_s3(
+        f"{hospital_path}hospital.json",
+        hospital_json,
+        tipo="json"
+    )
+
+    # Dash Gustavo:
+
+    unidade_json = {
+        "id": id_unidade,
+        "nome": hierarquia["unidade"]
+    }
+
+    salvar_s3(
+        f"{unidade_path}unidade.json",
+        unidade_json,
+        tipo="json"
+    )
+
+    # Dash Maria:
+
+    monitor_json = {
+        "id": id_monitor,
+        "ativo": monitor_ativo,
+        "statusGeral": statusgeral,
+        "quantidadeModulosAtivos": qtd_modulos_ativos
+    }
+
+    salvar_s3(
+        caminho_monitor,
+        monitor_json,
+        tipo="json"
     )
 
     print("CLIENT atualizado")
-    print(f"Arquivo: {caminho}")
+    print(f"Empresa: {id_empresa}")
+    print(f"Hospital: {id_hospital}")
+    print(f"Unidade: {id_unidade}")
+    print(f"Monitor: {id_monitor}")
 
     return resultado
 
