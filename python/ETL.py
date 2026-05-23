@@ -373,7 +373,6 @@ def client(df, cursor):
     statusram = status(ram, limite_ram, "ram")
     statusdisco = status(disk, limite_disk, "disco")
     statusrede = status(rede, limite_rede, "rede")
-    print(f"DEBUG: Valor rede={rede}, Limite rede={limite_rede}, Status={statusrede}")
 
     if "Crítico" in [statuscpu, statusram, statusdisco, statusrede]:
         statusgeral = "Crítico"
@@ -523,19 +522,22 @@ def client(df, cursor):
     ultimaSemana = dataAtual - timedelta(days=7) 
     df_semana = df_client[df_client["timestamp"] >= ultimaSemana].copy() 
 
-    alertasCpu = int((df_semana["cpu_percent"].apply(lambda x: status(x, limite_cpu, "cpu")) != "OK").sum())
-    alertasRam = int((df_semana["ram_percent"].apply(lambda x: status(x, limite_ram, "ram")) != "OK").sum())
-    alertasDisco = int((df_semana["disk_used"].apply(lambda x: status(x, limite_disk, "disco")) != "OK").sum())
-    alertasRede = int((df_semana["banda_larga"].apply(lambda x: status(x, limite_rede, "rede")) != "OK").sum())
+    alertasCpu = int((df_semana["cpu_percent"].apply(lambda x: status(x, limite_cpu, "cpu")) == "Alerta").sum())
+    alertasRam = int((df_semana["ram_percent"].apply(lambda x: status(x, limite_ram, "ram")) == "Alerta").sum())
+    alertasDisco = int((df_semana["disk_used"].apply(lambda x: status(x, limite_disk, "disco")) == "Alerta").sum())
+    alertasRede = int((df_semana["banda_larga"].apply(lambda x: status(x, limite_rede, "rede")) == "Alerta").sum())
+    
     
     # A função lambda é para: a cada valor capturado, se for diferente do status OK, gere um alerta
 
+    criticosCPU = (df_semana["cpu_percent"].apply(lambda x: status(x, limite_cpu, "cpu")) == "Crítico").sum()
+    criticosRAM = (df_semana["ram_percent"].apply(lambda x: status(x, limite_ram, "ram")) == "Crítico").sum()
+    critiscosDisco = (df_semana["disk_used"].apply(lambda x: status(x, limite_disk, "disco")) == "Crítico").sum()
+    criticosRede = (df_semana["banda_larga"].apply(lambda x: status(x, limite_rede, "rede")) == "Crítico").sum()
     criticos = int(
-        ((df_semana["cpu_percent"].apply(lambda x: status(x, limite_cpu, "cpu")) == "Crítico") |
-         (df_semana["ram_percent"].apply(lambda x: status(x, limite_ram, "ram")) == "Crítico") |
-         (df_semana["disk_used"].apply(lambda x: status(x, limite_disk, "disco")) == "Crítico") |
-         (df_semana["banda_larga"].apply(lambda x: status(x, limite_rede, "rede")) == "Crítico")).sum()
+        criticosCPU + criticosRAM + critiscosDisco + criticosRede
     )
+
     # Agora para os críticos, para cada valor capturado, se for acima de 20% do limite se categoriza como crítico
 
     # Filtragem se o arquivo hospital.json no diretório hospital_id já existe
@@ -555,33 +557,45 @@ def client(df, cursor):
             "ultimaAtualizacao": dataAtual.strftime("%Y-%m-%d %H:%M:%S"),
             "alertasSemanais": {
                 "totalAlertas": 0,
-                "criticos": 0,
-                "porComponente": {"cpu": 0, "ram": 0, "disco": 0, "rede": 0}
+                    "porComponente": {"cpu": 0, "ram": 0, "disco": 0, "rede": 0}
+            },
+            "criticos": {
+                "totalCriticos": 0,
+                "porComponente": {"cpuCritico": 0, "ramCritico": 0, "discoCritico": 0, "redeCritico": 0}
             },
             "alertasSemanaPassada": {
-                "totalAlertas": 0
+                "totalAlertas": 0,
+                "totalCriticos" : 0
             }
         }
+        
         semanaPassada = semanaAtual
 
     if semanaAtual > semanaPassada: # Valida se a semana virou e atribui os valores da semana atual na passada e reseta a atual
-        jsonHospital["alertasSemanaPassada"]["totalAlertas"] = jsonHospital["alertasSemanais"]["totalAlertas"]      
+        jsonHospital["alertasSemanaPassada"]["totalAlertas"] = jsonHospital["alertasSemanais"]["totalAlertas"]
+        jsonHospital["alertasSemanaPassada"]["totalCriticos"] = jsonHospital["criticos"]["totalCriticos"]      
 
         jsonHospital["alertasSemanais"]["totalAlertas"] = 0
-        jsonHospital["alertasSemanais"]["criticos"] = 0
+        jsonHospital["criticos"]["totalCriticos"] = 0
         jsonHospital["alertasSemanais"]["porComponente"] = {"cpu": 0, "ram": 0, "disco": 0, "rede": 0}
+        jsonHospital["criticos"]["porComponente"] = {"cpuCritico": 0, "ramCritico": 0, "discoCritico" : 0, "redeCritico" : 0}
+        
 
     # Acumula o número de alertas
     jsonHospital["ultimaAtualizacao"] = dataAtual.strftime("%Y-%m-%d %H:%M:%S")
-    jsonHospital["alertasSemanais"]["criticos"] += criticos
-    
-    jsonHospital["alertasSemanais"]["porComponente"]["cpu"] += alertasCpu
-    jsonHospital["alertasSemanais"]["porComponente"]["ram"] += alertasRam
-    jsonHospital["alertasSemanais"]["porComponente"]["disco"] += alertasDisco
-    jsonHospital["alertasSemanais"]["porComponente"]["rede"] += alertasRede
+    jsonHospital["alertasSemanais"]["porComponente"]["cpu"] += int(alertasCpu)
+    jsonHospital["alertasSemanais"]["porComponente"]["ram"] += int(alertasRam)
+    jsonHospital["alertasSemanais"]["porComponente"]["disco"] += int(alertasDisco)
+    jsonHospital["alertasSemanais"]["porComponente"]["rede"] += int(alertasRede)
+    jsonHospital["criticos"]["totalCriticos"] += int(criticos)
+    jsonHospital["criticos"]["porComponente"]["cpuCritico"] += int(criticosCPU)
+    jsonHospital["criticos"]["porComponente"]["ramCritico"] += int(criticosRAM)
+    jsonHospital["criticos"]["porComponente"]["discoCritico"] += int(critiscosDisco)
+    jsonHospital["criticos"]["porComponente"]["redeCritico"] += int(criticosRede)
 
-    # Calcula novamente os alertas semanais para acumular
+    # Calcula novamente os alertas semanais para acumular)
     jsonHospital["alertasSemanais"]["totalAlertas"] = sum(jsonHospital["alertasSemanais"]["porComponente"].values())
+    jsonHospital["criticos"]["totalCriticos"] = sum(jsonHospital["criticos"]["porComponente"].values())
 
     s3.put_object(
         Bucket=bucket,
