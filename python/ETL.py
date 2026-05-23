@@ -341,24 +341,38 @@ def client(df, cursor):
 
     kpi_rede_zero = (df_client["banda_larga"] <= 0.01).sum()
 
-    def status(valor, limite):
+    def status(valor, limite, componente):
         if limite is None:
             return "Sem limite definido"
-        if valor <= limite:
-            return "OK"
-        elif valor <= limite * 1.2:
-            return "Alerta"
-        return "Crítico"
+        
+        # Quanto maior pior
+        if componente in ["cpu", "ram", "disco"]:
+            if valor <= limite: return "OK"
+            if valor <= limite * 1.2: return "Alerta"
+            return "Crítico"
+        
+        # Quanto menor pior, velocidade de rede rápida, está bom, quando estiver abaixo a rede fica lenta
+        elif componente == "rede":
+            if valor < 0.001: 
+                return "Crítico" 
+            
+            elif valor > limite:
+                return "Alerta"
 
+            else:
+                return "OK"
+            
+        return "OK"
+    
     limite_cpu = limites.get("cpu")
     limite_ram = limites.get("ram")
     limite_disk = limites.get("disco_usado")
     limite_rede = limites.get("rede")
 
-    statuscpu = status(cpu, limite_cpu)
-    statusram = status(ram, limite_ram)
-    statusdisco = status(disk, limite_disk)
-    statusrede = status(rede, limite_rede)
+    statuscpu = status(cpu, limite_cpu, "cpu")
+    statusram = status(ram, limite_ram, "ram")
+    statusdisco = status(disk, limite_disk, "disco")
+    statusrede = status(rede, limite_rede, "rede")
 
     if "Crítico" in [statuscpu, statusram, statusdisco, statusrede]:
         statusgeral = "Crítico"
@@ -498,18 +512,98 @@ def client(df, cursor):
         tipo="json"
     )
 
-    # Dash Diego Henrique:
+    # ======= DASHBOARD DIEGO HENRIQUE ======== 
 
-    hospital_json = {
-        "id": id_hospital,
-        "nome": hierarquia["hospital"]
-    }
+    caminhoJsonHospital = f"{hospital_path}hospital.json"
+    dataAtual = datetime.now()
+    semanaAtual = dataAtual.isocalendar()[1] # Pega o número da semana do ano
 
-    salvar_s3(
-        f"{hospital_path}hospital.json",
-        hospital_json,
-        tipo="json"
+    # Contagem de alertas na última semana
+    ultimaSemana = dataAtual - timedelta(days=7) 
+    df_semana = df_client[df_client["timestamp"] >= ultimaSemana].copy() 
+
+    alertasCpu = int((df_semana["cpu_percent"].apply(lambda x: status(x, limite_cpu, "cpu")) == "Alerta").sum())
+    alertasRam = int((df_semana["ram_percent"].apply(lambda x: status(x, limite_ram, "ram")) == "Alerta").sum())
+    alertasDisco = int((df_semana["disk_used"].apply(lambda x: status(x, limite_disk, "disco")) == "Alerta").sum())
+    alertasRede = int((df_semana["banda_larga"].apply(lambda x: status(x, limite_rede, "rede")) == "Alerta").sum())
+    
+    
+    # A função lambda é para: a cada valor capturado, se for diferente do status OK, gere um alerta
+
+    criticosCPU = (df_semana["cpu_percent"].apply(lambda x: status(x, limite_cpu, "cpu")) == "Crítico").sum()
+    criticosRAM = (df_semana["ram_percent"].apply(lambda x: status(x, limite_ram, "ram")) == "Crítico").sum()
+    critiscosDisco = (df_semana["disk_used"].apply(lambda x: status(x, limite_disk, "disco")) == "Crítico").sum()
+    criticosRede = (df_semana["banda_larga"].apply(lambda x: status(x, limite_rede, "rede")) == "Crítico").sum()
+    criticos = int(
+        criticosCPU + criticosRAM + critiscosDisco + criticosRede
     )
+
+    # Agora para os críticos, para cada valor capturado, se for acima de 20% do limite se categoriza como crítico
+
+    # Filtragem se o arquivo hospital.json no diretório hospital_id já existe
+    arquivoExiste = s3.list_objects_v2(Bucket=bucket, Prefix=caminhoJsonHospital)
+    
+    if "Contents" in arquivoExiste: # Se retornar "Contents" ele já existe
+        respostaS3 = s3.get_object(Bucket=bucket, Key=caminhoJsonHospital)
+        jsonHospital = json.loads(respostaS3['Body'].read().decode('utf-8'))
+        
+        ultimaAtualizacao = datetime.strptime(jsonHospital["ultimaAtualizacao"], "%Y-%m-%d %H:%M:%S")
+        semanaPassada = ultimaAtualizacao.isocalendar()[1]
+        
+    else: # Criação do arquivo caso não exista
+        jsonHospital = {
+            "id": id_hospital,
+            "nome": hierarquia["hospital"],
+            "ultimaAtualizacao": dataAtual.strftime("%Y-%m-%d %H:%M:%S"),
+            "alertasSemanais": {
+                "totalAlertas": 0,
+                    "porComponente": {"cpu": 0, "ram": 0, "disco": 0, "rede": 0}
+            },
+            "criticos": {
+                "totalCriticos": 0,
+                "porComponente": {"cpuCritico": 0, "ramCritico": 0, "discoCritico": 0, "redeCritico": 0}
+            },
+            "alertasSemanaPassada": {
+                "totalAlertas": 0,
+                "totalCriticos" : 0
+            }
+        }
+        
+        semanaPassada = semanaAtual
+
+    if semanaAtual > semanaPassada: # Valida se a semana virou e atribui os valores da semana atual na passada e reseta a atual
+        jsonHospital["alertasSemanaPassada"]["totalAlertas"] = jsonHospital["alertasSemanais"]["totalAlertas"]
+        jsonHospital["alertasSemanaPassada"]["totalCriticos"] = jsonHospital["criticos"]["totalCriticos"]      
+
+        jsonHospital["alertasSemanais"]["totalAlertas"] = 0
+        jsonHospital["criticos"]["totalCriticos"] = 0
+        jsonHospital["alertasSemanais"]["porComponente"] = {"cpu": 0, "ram": 0, "disco": 0, "rede": 0}
+        jsonHospital["criticos"]["porComponente"] = {"cpuCritico": 0, "ramCritico": 0, "discoCritico" : 0, "redeCritico" : 0}
+        
+
+    # Acumula o número de alertas
+    jsonHospital["ultimaAtualizacao"] = dataAtual.strftime("%Y-%m-%d %H:%M:%S")
+    jsonHospital["alertasSemanais"]["porComponente"]["cpu"] += int(alertasCpu)
+    jsonHospital["alertasSemanais"]["porComponente"]["ram"] += int(alertasRam)
+    jsonHospital["alertasSemanais"]["porComponente"]["disco"] += int(alertasDisco)
+    jsonHospital["alertasSemanais"]["porComponente"]["rede"] += int(alertasRede)
+    jsonHospital["criticos"]["totalCriticos"] += int(criticos)
+    jsonHospital["criticos"]["porComponente"]["cpuCritico"] += int(criticosCPU)
+    jsonHospital["criticos"]["porComponente"]["ramCritico"] += int(criticosRAM)
+    jsonHospital["criticos"]["porComponente"]["discoCritico"] += int(critiscosDisco)
+    jsonHospital["criticos"]["porComponente"]["redeCritico"] += int(criticosRede)
+
+    # Calcula novamente os alertas semanais para acumular)
+    jsonHospital["alertasSemanais"]["totalAlertas"] = sum(jsonHospital["alertasSemanais"]["porComponente"].values())
+    jsonHospital["criticos"]["totalCriticos"] = sum(jsonHospital["criticos"]["porComponente"].values())
+
+    s3.put_object(
+        Bucket=bucket,
+        Key=caminhoJsonHospital,
+        Body=json.dumps(jsonHospital, ensure_ascii=False), # ensure ascii garante que se houver acentos eles não serão substituídos
+        ContentType='application/json'
+    )
+    # ========== FIM DA DASH DO DIEGO HENRIQUE ==========
 
     # Dash Gustavo:
 
