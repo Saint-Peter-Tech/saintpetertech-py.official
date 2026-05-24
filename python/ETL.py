@@ -528,14 +528,14 @@ def client(df, cursor):
     alertasRede = int((df_semana["banda_larga"].apply(lambda x: status(x, limite_rede, "rede")) == "Alerta").sum())
     
     
-    # A função lambda é para: a cada valor capturado, se for diferente do status OK, gere um alerta
+    # A função lambda é para: a cada x valor capturado, se for do status Alerta, gere um alerta comum
 
     criticosCPU = (df_semana["cpu_percent"].apply(lambda x: status(x, limite_cpu, "cpu")) == "Crítico").sum()
     criticosRAM = (df_semana["ram_percent"].apply(lambda x: status(x, limite_ram, "ram")) == "Crítico").sum()
-    critiscosDisco = (df_semana["disk_used"].apply(lambda x: status(x, limite_disk, "disco")) == "Crítico").sum()
+    criticosDisco = (df_semana["disk_used"].apply(lambda x: status(x, limite_disk, "disco")) == "Crítico").sum()
     criticosRede = (df_semana["banda_larga"].apply(lambda x: status(x, limite_rede, "rede")) == "Crítico").sum()
     criticos = int(
-        criticosCPU + criticosRAM + critiscosDisco + criticosRede
+        criticosCPU + criticosRAM + criticosDisco + criticosRede
     )
 
     # Agora para os críticos, para cada valor capturado, se for acima de 20% do limite se categoriza como crítico
@@ -563,6 +563,8 @@ def client(df, cursor):
                 "totalCriticos": 0,
                 "porComponente": {"cpuCritico": 0, "ramCritico": 0, "discoCritico": 0, "redeCritico": 0}
             },
+            "unidades": {}, 
+            "unidadeMaisCritica": {"nome": "Não encontrado", "totalCriticos": 0},
             "alertasSemanaPassada": {
                 "totalAlertas": 0,
                 "totalCriticos" : 0
@@ -579,6 +581,8 @@ def client(df, cursor):
         jsonHospital["criticos"]["totalCriticos"] = 0
         jsonHospital["alertasSemanais"]["porComponente"] = {"cpu": 0, "ram": 0, "disco": 0, "rede": 0}
         jsonHospital["criticos"]["porComponente"] = {"cpuCritico": 0, "ramCritico": 0, "discoCritico" : 0, "redeCritico" : 0}
+        jsonHospital["unidades"] = {}
+        jsonHospital["unidadeMaisCritica"] = {"nome:" : "Não encontrado", "totalCriticos" : 0}
         
 
     # Acumula o número de alertas
@@ -590,12 +594,49 @@ def client(df, cursor):
     jsonHospital["criticos"]["totalCriticos"] += int(criticos)
     jsonHospital["criticos"]["porComponente"]["cpuCritico"] += int(criticosCPU)
     jsonHospital["criticos"]["porComponente"]["ramCritico"] += int(criticosRAM)
-    jsonHospital["criticos"]["porComponente"]["discoCritico"] += int(critiscosDisco)
+    jsonHospital["criticos"]["porComponente"]["discoCritico"] += int(criticosDisco)
     jsonHospital["criticos"]["porComponente"]["redeCritico"] += int(criticosRede)
+
+    # Classificação de criticidade por unidade
+    unidadeKey = str(id_unidade)
+    if unidadeKey not in jsonHospital["unidades"]:
+        jsonHospital["unidades"][unidadeKey] = {"nome": hierarquia["unidade"], "totalCriticos": 0, "totalComuns" : 0,
+                                                "detalhesCriticos": {"cpuCritico": 0, "ramCritico": 0, "discoCritico": 0, "redeCritico": 0},
+                                                "detalhes": {"cpu": 0, "ram": 0, "disco": 0, "rede": 0}}
+    
+    totalComuns = int(alertasCpu + alertasRam + alertasDisco + alertasRede)
+    jsonHospital["unidades"][unidadeKey]["totalCriticos"] += int(criticos)
+    jsonHospital["unidades"][unidadeKey]["totalComuns"] += int(totalComuns)
+    jsonHospital["unidades"][unidadeKey]["detalhes"]["cpu"] += int(alertasCpu)
+    jsonHospital["unidades"][unidadeKey]["detalhes"]["ram"] += int(alertasRam)
+    jsonHospital["unidades"][unidadeKey]["detalhes"]["disco"] += int(alertasDisco)
+    jsonHospital["unidades"][unidadeKey]["detalhes"]["rede"] += int(alertasRede)
+    jsonHospital["unidades"][unidadeKey]["detalhesCriticos"]["cpuCritico"] += int(criticosCPU)
+    jsonHospital["unidades"][unidadeKey]["detalhesCriticos"]["ramCritico"] += int(criticosRAM)
+    jsonHospital["unidades"][unidadeKey]["detalhesCriticos"]["discoCritico"] += int(criticosDisco)
+    jsonHospital["unidades"][unidadeKey]["detalhesCriticos"]["redeCritico"] += int(criticosRede)
+
+    # Filtrando a mais crítica
+
+    # Para cada nome de unidade X, compare os valores total de críticos
+    unidadeMaisCritica = max(jsonHospital["unidades"].values(), key=lambda x: x["totalCriticos"])
+    jsonHospital["unidadeMaisCritica"] = unidadeMaisCritica
 
     # Calcula novamente os alertas semanais para acumular)
     jsonHospital["alertasSemanais"]["totalAlertas"] = sum(jsonHospital["alertasSemanais"]["porComponente"].values())
     jsonHospital["criticos"]["totalCriticos"] = sum(jsonHospital["criticos"]["porComponente"].values())
+
+    listaUnidades = list(jsonHospital["unidades"].values())
+
+    rankingUnidades = sorted(
+        listaUnidades, 
+        key=lambda x: (x["totalCriticos"], x["totalComuns"]), 
+        reverse=True
+    )
+
+    jsonHospital["rankingUnidades"] = rankingUnidades
+
+    jsonHospital["unidadeMaisCritica"] = rankingUnidades[0]
 
     s3.put_object(
         Bucket=bucket,
