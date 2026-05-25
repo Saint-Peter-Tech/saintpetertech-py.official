@@ -557,7 +557,7 @@ def client(df, cursor):
             "ultimaAtualizacao": dataAtual.strftime("%Y-%m-%d %H:%M:%S"),
             "alertasSemanais": {
                 "totalAlertas": 0,
-                    "porComponente": {"cpu": 0, "ram": 0, "disco": 0, "rede": 0}
+                "porComponente": {"cpu": 0, "ram": 0, "disco": 0, "rede": 0}
             },
             "criticos": {
                 "totalCriticos": 0,
@@ -567,22 +567,27 @@ def client(df, cursor):
             "unidadeMaisCritica": {"nome": "Não encontrado", "totalCriticos": 0},
             "alertasSemanaPassada": {
                 "totalAlertas": 0,
-                "totalCriticos" : 0
+                "totalCriticos" : 0,
+                "porComponente": {"cpu": 0, "ram": 0, "disco": 0, "rede": 0},
+                "criticosPorComponente": {"cpuCritico": 0, "ramCritico": 0, "discoCritico": 0, "redeCritico": 0}
             }
         }
         
         semanaPassada = semanaAtual
 
-    if semanaAtual > semanaPassada: # Valida se a semana virou e atribui os valores da semana atual na passada e reseta a atual
+    if semanaAtual > semanaPassada:
         jsonHospital["alertasSemanaPassada"]["totalAlertas"] = jsonHospital["alertasSemanais"]["totalAlertas"]
         jsonHospital["alertasSemanaPassada"]["totalCriticos"] = jsonHospital["criticos"]["totalCriticos"]      
+
+        jsonHospital["alertasSemanaPassada"]["porComponente"] = dict(jsonHospital["alertasSemanais"]["porComponente"])
+        jsonHospital["alertasSemanaPassada"]["criticosPorComponente"] = dict(jsonHospital["criticos"]["porComponente"])
 
         jsonHospital["alertasSemanais"]["totalAlertas"] = 0
         jsonHospital["criticos"]["totalCriticos"] = 0
         jsonHospital["alertasSemanais"]["porComponente"] = {"cpu": 0, "ram": 0, "disco": 0, "rede": 0}
         jsonHospital["criticos"]["porComponente"] = {"cpuCritico": 0, "ramCritico": 0, "discoCritico" : 0, "redeCritico" : 0}
         jsonHospital["unidades"] = {}
-        jsonHospital["unidadeMaisCritica"] = {"nome:" : "Não encontrado", "totalCriticos" : 0}
+        jsonHospital["unidadeMaisCritica"] = {"nome" : "Não encontrado", "totalCriticos" : 0}
         
 
     # Acumula o número de alertas
