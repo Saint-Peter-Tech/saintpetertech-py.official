@@ -658,74 +658,74 @@ def client(df, cursor):
     ########################################### Dash Maria:
 
     caminhoJsonMonitor = f"{caminho_monitor}.json"
-    dataAtual = datetime.now()
-    semanaAtual = dataAtual.isocalendar()[1]  # Pega o número da semana do ano
-
-    # Contagem de alertas na última semana
-    ultimaSemana = dataAtual - timedelta(days=7)
-    df_semana = df_client[df_client["timestamp"] >= ultimaSemana].copy()
-
-    alertasCpu = int(
-        (
-            df_semana["cpu_percent"].apply(lambda x: status(x, limite_cpu, "cpu"))
-            == "Alerta"
-        ).sum()
-    )
-    alertasRam = int(
-        (
-            df_semana["ram_percent"].apply(lambda x: status(x, limite_ram, "ram"))
-            == "Alerta"
-        ).sum()
-    )
-    alertasDisco = int(
-        (
-            df_semana["disk_used"].apply(lambda x: status(x, limite_disk, "disco"))
-            == "Alerta"
-        ).sum()
-    )
-    alertasRede = int(
-        (
-            df_semana["banda_larga"].apply(lambda x: status(x, limite_rede, "rede"))
-            == "Alerta"
-        ).sum()
-    )
-
-    # A função lambda é para: a cada x valor capturado, se for do status Alerta, gere um alerta comum
-
-    criticosCPU = (
-        df_semana["cpu_percent"].apply(lambda x: status(x, limite_cpu, "cpu"))
-        == "Crítico"
-    ).sum()
-    criticosRAM = (
-        df_semana["ram_percent"].apply(lambda x: status(x, limite_ram, "ram"))
-        == "Crítico"
-    ).sum()
-    criticosDisco = (
-        df_semana["disk_used"].apply(lambda x: status(x, limite_disk, "disco"))
-        == "Crítico"
-    ).sum()
-    criticosRede = (
-        df_semana["banda_larga"].apply(lambda x: status(x, limite_rede, "rede"))
-        == "Crítico"
-    ).sum()
-    criticos = int(criticosCPU + criticosRAM + criticosDisco + criticosRede)
-
+     
+    #dataAtual = datetime.now()
+    #semanaAtual = dataAtual.isocalendar()[1]  # Pega o número da semana do ano
+#
+    ## Contagem de alertas na última semana
+    #ultimaSemana = dataAtual - timedelta(days=7)
+    #df_semana = df_client[df_client["timestamp"] >= ultimaSemana].copy()
+#
+    #alertasCpu = int(
+    #    (
+    #        df_semana["cpu_percent"].apply(lambda x: status(x, limite_cpu, "cpu"))
+    #        == "Alerta"
+    #    ).sum()
+    #)
+    #alertasRam = int(
+    #    (
+    #        df_semana["ram_percent"].apply(lambda x: status(x, limite_ram, "ram"))
+    #        == "Alerta"
+    #    ).sum()
+    #)
+    #alertasDisco = int(
+    #    (
+    #        df_semana["disk_used"].apply(lambda x: status(x, limite_disk, "disco"))
+    #        == "Alerta"
+    #    ).sum()
+    #)
+    #alertasRede = int(
+    #    (
+    #        df_semana["banda_larga"].apply(lambda x: status(x, limite_rede, "rede"))
+    #        == "Alerta"
+    #    ).sum()
+    #)
+#
+    ## A função lambda é para: a cada x valor capturado, se for do status Alerta, gere um alerta comum
+#
+    #criticosCPU = (
+    #    df_semana["cpu_percent"].apply(lambda x: status(x, limite_cpu, "cpu"))
+    #    == "Crítico"
+    #).sum()
+    #criticosRAM = (
+    #    df_semana["ram_percent"].apply(lambda x: status(x, limite_ram, "ram"))
+    #    == "Crítico"
+    #).sum()
+    #criticosDisco = (
+    #    df_semana["disk_used"].apply(lambda x: status(x, limite_disk, "disco"))
+    #    == "Crítico"
+    #).sum()
+    #criticosRede = (
+    #    df_semana["banda_larga"].apply(lambda x: status(x, limite_rede, "rede"))
+    #    == "Crítico"
+    #).sum()
+    #criticos = int(criticosCPU + criticosRAM + criticosDisco + criticosRede)
+#
     arquivoExiste = s3.list_objects_v2(Bucket=bucket, Prefix=caminhoJsonMonitor)
 
     if "Contents" in arquivoExiste:  # Se retornar "Contents" ele já existe
         respostaS3 = s3.get_object(Bucket=bucket, Key=caminhoJsonMonitor)
         jsonMonitor = json.loads(respostaS3["Body"].read().decode("utf-8"))
 
-        ultimaAtualizacao = datetime.strptime(
-            jsonMonitor["ultimaAtualizacao"], "%Y-%m-%d %H:%M:%S"
+        ultimaAtualizacao = (
+            df_client["timestamp"]
         )
-        semanaPassada = ultimaAtualizacao.isocalendar()[1]
+        #semanaPassada = ultimaAtualizacao.isocalendar()[1]
 
     else:
         jsonMonitor = {
             "id": id_monitor,
             "ativo": monitor_ativo,
-            "statusGeral": statusgeral,
             "horario": horarioFim,
             "qtdAlertasCriticos": criticos,
             "cpu": {
