@@ -1268,7 +1268,12 @@ def client(df, cursor):
        
     totalAlertas = (alertasCpu + alertasRam + alertasDisco + alertasRede);
     
-    print('Alertas totais do monitor: ', totalAlertas);        
+    print('Alertas totais do monitor: ', totalAlertas);
+    
+    horarioGrafico = datetime.strptime(
+    horarioFim,
+    "%Y-%m-%d %H:%M:%S"
+    ).strftime("%H:%M")
     
 >>>>>>> 58d6841 (atualizando meu json)
     arquivoExiste = s3.list_objects_v2(Bucket=bucket, Prefix=caminhoJsonMonitor)
@@ -1285,7 +1290,8 @@ def client(df, cursor):
         jsonMonitor = {
             "id": id_monitor,
             "ativo": monitor_ativo,
-            "horario": horarioFim,  
+            "horario": horarioFim, 
+            "horarioGrafico": horarioGrafico, 
             "cpu": {
                 "usoCpuPercent": df_client["cpu_percent"].iloc[-1],
                 "cpuPico": cpu,
