@@ -1061,11 +1061,131 @@ def client(df, cursor):
     )
     # ========== FIM DA DASH DO DIEGO HENRIQUE ==========
 
-    # Dash Gustavo:
+    # ------------------------Dash Gustavo---------------------------------------------------------------------------------------
+    caminhoJsonUnidade = f"{unidade_path}unidade.json"
 
-    unidade_json = {"id": id_unidade, "nome": hierarquia["unidade"]}
+    arquivoExisteUnidade = s3.list_objects_v2(Bucket=bucket, Prefix=caminhoJsonUnidade)
 
-    salvar_s3(f"{unidade_path}unidade.json", unidade_json, tipo="json")
+    if "Contents" in arquivoExisteUnidade:
+        respostaUnidade = s3.get_object(Bucket=bucket, Key=caminhoJsonUnidade)
+        jsonUnidade = json.loads(respostaUnidade["Body"].read().decode("utf-8"))
+    else:
+        jsonUnidade = {
+            "id": id_unidade,
+            "nome": hierarquia["unidade"],
+            "listaMonitores": {},
+            "trafegoRede":[]
+        }
+
+    jsonUnidade["listaMonitores"][str(id_monitor)] = {
+        "id": id_monitor, "ativo": monitor_ativo,
+        "statusGeral": statusgeral,
+        "tempoUsoHoras":round(intervalo / 60, 2),
+        "cpu": cpu, "ram": ram, "disco":diskUsed,
+        "rede": rede
+    }
+
+
+    total = 0
+    ativos = 0
+    alerta = 0
+    criticos = 0
+    somaTempo = 0
+    acima12 = 0
+    jsonUnidade["monitoresEmAlertaLista"] = []
+    jsonUnidade["monitoresAltoTempoUso"] = []
+    maiorCpu = 0
+    maiorRam = 0
+    maiorDisco = 0
+
+    lista = list(jsonUnidade["listaMonitores"].values())
+
+    for mon in lista:
+
+        total += 1
+
+        if mon["ativo"] == True:
+            ativos += 1
+
+        if mon["statusGeral"] == "Alerta":
+            alerta += 1
+
+        if mon["statusGeral"] == "Crítico":
+            criticos += 1
+
+        somaTempo += mon["tempoUsoHoras"]
+
+        if mon["tempoUsoHoras"] >= 12:
+            acima12+= 1
+            jsonUnidade["monitoresAltoTempoUso"].append(mon)
+
+        if mon["statusGeral"] == "Alerta" or mon["statusGeral"] == "Crítico":
+            jsonUnidade["monitoresEmAlertaLista"].append(mon)
+
+        if mon["cpu"] > maiorCpu:
+            maiorCpu = mon["cpu"]
+
+        if mon["ram"] > maiorRam:
+            maiorRam = mon["ram"]
+
+        if mon["disco"] >maiorDisco:
+            maiorDisco = mon["disco"]
+
+    jsonUnidade["monitoresAltoTempoUso"] = sorted(
+        jsonUnidade["monitoresAltoTempoUso"],
+        key=lambda x: x["tempoUsoHoras"],
+        reverse=True
+    )
+
+    if total > 0:
+        mediaTempo = somaTempo / total
+    else:
+        mediaTempo = 0
+
+    jsonUnidade["totalMonitores"] = total
+    jsonUnidade["monitoresAtivos"] = ativos
+    jsonUnidade["emAlerta"] = alerta
+    jsonUnidade["criticos"] = criticos
+    jsonUnidade["tempoMedioUsoHoras"] = round(mediaTempo, 1)
+    jsonUnidade["monitoresAcimaDeDozeHoras"] = acima12
+
+    jsonUnidade["modulosAtivos"] = {}
+    qtdModulosAtivos = 0
+    for col in status_cols:
+        jsonUnidade["modulosAtivos"][col] = ultimo[col]
+        if ultimo[col] == "Ativo":
+            qtdModulosAtivos += 1
+
+    jsonUnidade["qtdModulosAtivos"] = qtdModulosAtivos
+
+    jsonUnidade["trafegoRede"].append({
+        "timestamp": horarioFim,
+        "trafegoMbps": float(df_client["banda_larga"].iloc[-1])
+    })
+
+    if len(jsonUnidade["trafegoRede"]) > 30:
+        jsonUnidade["trafegoRede"] = jsonUnidade["trafegoRede"][-30:]
+
+    jsonUnidade["redeTotalMbps"] = rede_total_unidade
+    
+    jsonUnidade["recursos"] = {
+        "cpu": {"pico": maiorCpu},
+        "ram": {"pico": maiorRam},
+        "disco": {"pico": maiorDisco}
+    }
+
+    jsonUnidade["ultimaAtualizacao"] = dataAtual.strftime("%Y-%m-%d %H:%M:%S")
+
+    s3.put_object(
+        Bucket=bucket,
+        Key=caminhoJsonUnidade,
+        Body=json.dumps(jsonUnidade, ensure_ascii=False),
+        ContentType="application/json"
+    )
+
+    # ---------------------------fim dash Gustavo -------------------------------------------------------------------------------
+
+
 
     ########################################### Dash Maria:
 
