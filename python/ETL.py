@@ -433,11 +433,195 @@ def client(df, cursor):
 
     salvar_s3(f"{base_path}controle.json", controle_json, tipo="json")
 
-    # Dash Diego Seiti:
+        # ======= DASHBOARD DIEGO SEITI ========
 
-    modelos_json = {"monitor": id_monitor}
+    caminhoJsonModelos = (f"client/" f"empresa_{hierarquia['id_empresa']}/" f"modelos/modelos.json")
 
-    salvar_s3(f"{base_path}modelos.json", modelos_json, tipo="json")
+    capturasTotais = len(df_client)
+
+    alertasCpu = int(
+        (
+            df_client["cpu_percent"].apply(lambda x: status(x, limite_cpu, "cpu"))
+            == "Alerta"
+        ).sum()
+    )
+    alertasRam = int(
+        (
+            df_client["ram_percent"].apply(lambda x: status(x, limite_ram, "ram"))
+            == "Alerta"
+        ).sum()
+    )
+    alertasRede = int(
+        (
+            df_client["banda_larga"].apply(lambda x: status(x, limite_rede, "rede"))
+            == "Alerta"
+        ).sum()
+    )
+
+    criticosCPU = (
+        df_client["cpu_percent"].apply(lambda x: status(x, limite_cpu, "cpu"))
+        == "Crítico"
+    ).sum()
+    criticosRAM = (
+        df_client["ram_percent"].apply(lambda x: status(x, limite_ram, "ram"))
+        == "Crítico"
+    ).sum()
+    criticosRede = (
+        df_client["banda_larga"].apply(lambda x: status(x, limite_rede, "rede"))
+        == "Crítico"
+    ).sum()
+
+    alertasCpuTotais = alertasCpu + criticosCPU
+    alertasRamTotais = alertasRam + criticosRAM
+    alertasRedeTotais = alertasRede + criticosRede
+
+    acimaLimiteCpu = alertasCpuTotais * 100 / capturasTotais
+    acimaLimiteRam = alertasRamTotais * 100 / capturasTotais
+    acimaLimiteRede = alertasRedeTotais * 100 / capturasTotais
+
+    healthScore = 100 - (alertasCpu * 0.15) - (criticosCPU * 0.40) - (alertasRam * 0.10) - (criticosRAM * 0.25) - (alertasRede * 0.35) - (criticosRede * 0.80)
+
+    capturasTotais = len(df_client)
+
+    try:
+
+        response = s3.get_object(
+            Bucket=bucket,
+            Key=caminhoJsonModelos
+        )
+
+        conteudo = response["Body"].read().decode("utf-8")
+
+        jsonModelos = json.loads(conteudo)
+
+    except Exception:
+
+        jsonModelos = {
+            "modelos": {}
+        }
+
+    idModelo = str(hierarquia["id_modelo"])
+
+    if idModelo not in jsonModelos["modelos"]:
+
+        jsonModelos["modelos"][idModelo] = {
+
+            "id_modelo": hierarquia["id_modelo"],
+            "nome": hierarquia["modelo"],
+
+            "capturas_totais": 0,
+
+            "alertas_cpu": 0,
+            "criticos_cpu": 0,
+
+            "alertas_ram": 0,
+            "criticos_ram": 0,
+
+            "alertas_rede": 0,
+            "criticos_rede": 0,
+
+            "cpu_acima_limite": 0,
+            "ram_acima_limite": 0,
+            "rede_acima_limite": 0,
+
+            "healthscore": 100
+        }
+
+    modelo = jsonModelos["modelos"][idModelo]
+
+    modelo["capturas_totais"] += capturasTotais
+
+    modelo["alertas_cpu"] += int(alertasCpu)
+    modelo["criticos_cpu"] += int(criticosCPU)
+
+    modelo["alertas_ram"] += int(alertasRam)
+    modelo["criticos_ram"] += int(criticosRAM)
+
+    modelo["alertas_rede"] += int(alertasRede)
+    modelo["criticos_rede"] += int(criticosRede)
+
+    totalCpu = (
+        modelo["alertas_cpu"]
+        + modelo["criticos_cpu"]
+    )
+
+    totalRam = (
+        modelo["alertas_ram"]
+        + modelo["criticos_ram"]
+    )
+
+    totalRede = (
+        modelo["alertas_rede"]
+        + modelo["criticos_rede"]
+    )
+
+    totalCapturas = modelo["capturas_totais"]
+
+    modelo["cpu_acima_limite"] = round(
+        (totalCpu * 100) / totalCapturas,
+        2
+    )
+
+    modelo["ram_acima_limite"] = round(
+        (totalRam * 100) / totalCapturas,
+        2
+    )
+
+    modelo["rede_acima_limite"] = round(
+        (totalRede * 100) / totalCapturas,
+        2
+    )
+
+    pctAlertaCpu = (
+        modelo["alertas_cpu"] * 100
+    ) / totalCapturas
+
+    pctCriticoCpu = (
+        modelo["criticos_cpu"] * 100
+    ) / totalCapturas
+
+    pctAlertaRam = (
+        modelo["alertas_ram"] * 100
+    ) / totalCapturas
+
+    pctCriticoRam = (
+        modelo["criticos_ram"] * 100
+    ) / totalCapturas
+
+    pctAlertaRede = (
+        modelo["alertas_rede"] * 100
+    ) / totalCapturas
+
+    pctCriticoRede = (
+        modelo["criticos_rede"] * 100
+    ) / totalCapturas
+
+    healthScore = (
+        100
+        - (pctAlertaCpu * 0.15)
+        - (pctCriticoCpu * 0.40)
+        - (pctAlertaRam * 0.10)
+        - (pctCriticoRam * 0.25)
+        - (pctAlertaRede * 0.35)
+        - (pctCriticoRede * 0.80)
+    )
+
+    modelo["healthscore"] = round(
+        max(0, min(100, healthScore)),
+        2
+    )
+
+    s3.put_object(
+        Bucket=bucket,
+        Key=caminhoJsonModelos,
+        Body=json.dumps(
+            jsonModelos, 
+            ensure_ascii=False
+        ),
+        ContentType="application/json",
+    )
+
+    # ======= FIM DA DASHBOARD DIEGO SEITI ========
 
     # ======= DASHBOARD PEDRO SOUSA ========
 
@@ -1025,7 +1209,7 @@ def client(df, cursor):
     if len(jsonUnidade["trafegoRede"]) > 30:
         jsonUnidade["trafegoRede"] = jsonUnidade["trafegoRede"][-30:]
 
-    jsonUnidade["redeTotalMbps"] = rede_total_unidade
+    # jsonUnidade["redeTotalMbps"] = rede_total_unidade
 
     jsonUnidade["recursos"] = {
         "cpu": {"pico": maiorCpu},
