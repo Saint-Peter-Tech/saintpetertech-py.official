@@ -154,7 +154,6 @@ def buscar_monitores_modelo(cursor, id_modelo):
 
     return [x[0] for x in resultado]
 
-
 def preparar_raw(df):
     df = df.copy()
     df["timestamp"] = pd.to_datetime(
@@ -1058,7 +1057,7 @@ def client(df, cursor):
             jsonHospital, ensure_ascii=False
         ),  # ensure ascii garante que se houver acentos eles não serão substituídos
         ContentType="application/json",
-    )
+    )   
     # ========== FIM DA DASH DO DIEGO HENRIQUE ==========
 
     # ------------------------Dash Gustavo---------------------------------------------------------------------------------------
@@ -1189,6 +1188,7 @@ def client(df, cursor):
 
     ########################################### Dash Maria:
 
+<<<<<<< HEAD
     caminhoJsonMonitor = caminho_monitor
      
     #dataAtual = datetime.now()
@@ -1243,6 +1243,34 @@ def client(df, cursor):
     #).sum()
     #criticos = int(criticosCPU + criticosRAM + criticosDisco + criticosRede)
 #
+=======
+    caminhoJsonMonitor = f"{caminho_monitor}"
+         
+    alertasCpu = 0;
+    alertasRam = 0;
+    alertasDisco = 0;
+    alertasRede = 0;
+    
+    usoDiscoPercent = diskUsed * 100 / diskTotal;
+    usoDiscoPercentForm = round(usoDiscoPercent, 2)
+        
+    if df_client["cpu_percent"].iloc[-1] > limite_cpu:
+        alertasCpu += 1;
+        
+    if df_client["ram_percent"].iloc[-1] > limite_ram:
+       alertasRam += 1;
+       
+    if rede > limite_rede:
+       alertasRede += 1;
+       
+    if usoDiscoPercent > limite_disk:
+       alertasDisco += 1;
+       
+    totalAlertas = (alertasCpu + alertasRam + alertasDisco + alertasRede);
+    
+    print('Alertas totais do monitor: ', totalAlertas);        
+    
+>>>>>>> 58d6841 (atualizando meu json)
     arquivoExiste = s3.list_objects_v2(Bucket=bucket, Prefix=caminhoJsonMonitor)
 
     if "Contents" in arquivoExiste:  # Se retornar "Contents" ele já existe
@@ -1252,21 +1280,24 @@ def client(df, cursor):
         ultimaAtualizacao = (
             df_client["timestamp"]
         )
-        #semanaPassada = ultimaAtualizacao.isocalendar()[1]
 
     else:
         jsonMonitor = {
             "id": id_monitor,
             "ativo": monitor_ativo,
-            "horario": horarioFim,
-            "qtdAlertasCriticos": criticos,
+            "horario": horarioFim,  
             "cpu": {
                 "usoCpuPercent": df_client["cpu_percent"].iloc[-1],
                 "cpuPico": cpu,
             },
             "ram": {"usoRamPercent": df_client["ram_percent"].iloc[-1], "ramPico": ram},
-            "disco": {"diskUsed": diskUsed, "diskTotal": diskTotal},
+            "disco": {
+                "diskUsed": diskUsed, 
+                "diskTotal": diskTotal,
+                "usoPercentualDisco": usoDiscoPercentForm
+            },
             "rede": {
+                "picoMbs": rede,
                 "upload": upload,
                 "download": download,
                 "trafegoTotal": trafego_total,
@@ -1278,6 +1309,13 @@ def client(df, cursor):
                 "limiteRede": limite_rede,
             },
             "modulos": {col: ultimo[col] for col in status_cols},
+            "alertasMonitor": {
+                "alertasCpu": alertasCpu,
+                "alertasRam": alertasRam,
+                "alertasDisco": alertasDisco,
+                "alertasRede": alertasRede,
+                "alertasTotais": totalAlertas
+            }
         }
 
     s3.put_object(
