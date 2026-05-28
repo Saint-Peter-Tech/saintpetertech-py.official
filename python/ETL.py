@@ -107,7 +107,9 @@ def buscar_hierarquia_monitor(cursor, id_monitor):
             h.id_hospital,
             e.razao_social,
             h.nome_hospital,
-            u.nome_unidade
+            u.nome_unidade,
+            mo.id_modelo,
+            mo.nome
         FROM monitores m
         JOIN unidades u
             ON m.fk_unidade = u.id_unidade
@@ -115,6 +117,8 @@ def buscar_hierarquia_monitor(cursor, id_monitor):
             ON u.fk_hospital = h.id_hospital
         JOIN empresas e
             ON m.fk_empresa = e.id_empresa
+        JOIN modelos mo
+            ON m.fk_modelo = mo.id_modelo
         WHERE m.id_monitor = %s
     """
 
@@ -132,7 +136,23 @@ def buscar_hierarquia_monitor(cursor, id_monitor):
         "empresa": resultado[4],
         "hospital": resultado[5],
         "unidade": resultado[6],
+        "id_modelo": resultado[7],
+        "modelo": resultado[8]
     }
+
+def buscar_monitores_modelo(cursor, id_modelo):
+
+    query = """
+        SELECT id_monitor
+        FROM monitores
+        WHERE fk_modelo = %s
+    """
+
+    cursor.execute(query, (id_modelo,))
+
+    resultado = cursor.fetchall()
+
+    return [x[0] for x in resultado]
 
 
 def preparar_raw(df):
@@ -212,6 +232,10 @@ def trusted(df):
 
     df["disk_total"] = (df["disk_total"] / 1024**3).round(2)
 
+    df["disk_percent"] = (
+    (df["disk_used"] / df["disk_total"]) * 100
+    ).round(2)
+
     hoje = datetime.now()
 
     key = (
@@ -246,7 +270,7 @@ def client(df, cursor):
 
     id_monitor = int(df_client["id_monitor"].iloc[-1])
 
-    hierarquia = buscar_hierarquia_monitor(cursor, id_monitor)
+    hierarquia = buscar_hierarquia_monitor(cursor, id_monitor)    
 
     if not hierarquia:
         print("Monitor não encontrado no banco")
@@ -276,6 +300,7 @@ def client(df, cursor):
     ultram = df_client["ram_percent"].iloc[-1]
 
     disk = df_client["disk_used"].max()
+    disk_percent = df_client["disk_percent"].max()
 
     rede = df_client["banda_larga"].max()
     minrede = df_client["banda_larga"].min()
@@ -332,7 +357,7 @@ def client(df, cursor):
 
     statuscpu = status(cpu, limite_cpu, "cpu")
     statusram = status(ram, limite_ram, "ram")
-    statusdisco = status(disk, limite_disk, "disco")
+    statusdisco = status(disk_percent, limite_disk, "disco")
     statusrede = status(rede, limite_rede, "rede")
 
     if "Crítico" in [statuscpu, statusram, statusdisco, statusrede]:
@@ -415,14 +440,401 @@ def client(df, cursor):
 
     salvar_s3(f"{base_path}modelos.json", modelos_json, tipo="json")
 
-    # Dash Pedro:
+    # ======= DASHBOARD PEDRO SOUSA ========
 
-    modulos_json = {
-        "monitor": id_monitor,
-        "modulos": {col: ultimo[col] for col in status_cols},
+    id_modelo = hierarquia["id_modelo"]
+
+    nome_modelo = hierarquia["modelo"]
+
+    monitores_modelo = buscar_monitores_modelo(
+        cursor,
+        id_modelo
+    )
+
+    df_modelo = preparar_raw(df)
+
+    df_modelo = df_modelo[
+        df_modelo["id_monitor"].isin(monitores_modelo)
+    ]
+
+    if df_modelo.empty:
+        print("Sem dados para o modelo")
+        return
+
+    primeiraCaptura = pd.to_datetime(
+        df_modelo["timestamp"].min()
+    )
+
+    ultimaCaptura = pd.to_datetime(
+        df_modelo["timestamp"].max()
+    )
+
+    diasCaptura = max(
+        (ultimaCaptura - primeiraCaptura).days,
+        1
+    )
+
+    modulos_map = {
+        "BPM": "bpm_status",
+        "PA": "pa_status",
+        "SPO2": "spo2_status",
+        "RESP": "resp_status",
+        "TEMP": "temperatura_status",
+        "PIC": "pic_status",
+        "PVC": "pvc_status",
+        "ECG": "ecg_status",
+        "ETCO2": "etco2_status"
     }
 
-    salvar_s3(f"{base_path}modulos.json", modulos_json, tipo="json")
+    modulos_analise = {}
+
+    for nome in modulos_map.keys():
+
+        modulos_analise[nome] = {
+            "ativos": 0,
+            "inativos": 0,
+            "ok": 0,
+            "alerta": 0,
+            "critico": 0,
+            "usoPercentual": 0
+        }
+
+    totalCapturas = len(df_modelo)
+
+    for _, row in df_modelo.iterrows():
+
+        statuscpu = status(
+            row["cpu_percent"],
+            limite_cpu,
+            "cpu"
+        )
+
+        statusram = status(
+            row["ram_percent"],
+            limite_ram,
+            "ram"
+        )
+
+        statusdisco = status(
+            row["disk_percent"],
+            limite_disk,
+            "disco"
+        )
+
+        statusrede = status(
+            row["banda_larga"],
+            limite_rede,
+            "rede"
+        )
+
+        statuses = [
+            statuscpu,
+            statusram,
+            statusdisco,
+            statusrede
+        ]
+
+        if "Crítico" in statuses:
+            statusgeral = "Crítico"
+
+        elif "Alerta" in statuses:
+            statusgeral = "Alerta"
+
+        else:
+            statusgeral = "OK"
+
+        for nome, coluna in modulos_map.items():
+
+            statusModulo = row[coluna]
+
+            if statusModulo == "Ativo":
+
+                modulos_analise[nome]["ativos"] += 1
+
+                if statusgeral == "OK":
+                    modulos_analise[nome]["ok"] += 1
+
+                elif statusgeral == "Alerta":
+                    modulos_analise[nome]["alerta"] += 1
+
+                elif statusgeral == "Crítico":
+                    modulos_analise[nome]["critico"] += 1
+
+            else:
+
+                modulos_analise[nome]["inativos"] += 1
+
+    moduloMaisUtilizado = max(
+        modulos_analise.items(),
+        key=lambda x: x[1]["ativos"]
+    )
+
+    moduloMaisCritico = max(
+        modulos_analise.items(),
+        key=lambda x: (
+            x[1]["alerta"] +
+            x[1]["critico"]
+        )
+    )
+
+    capturasProblema = 0
+
+    for _, row in df_modelo.iterrows():
+
+        statuses = [
+            status(row["cpu_percent"], limite_cpu, "cpu"),
+            status(row["ram_percent"], limite_ram, "ram"),
+            status(row["disk_percent"], limite_disk, "disco"),
+            status(row["banda_larga"], limite_rede, "rede")
+        ]
+
+        if "Alerta" in statuses or "Crítico" in statuses:
+            capturasProblema += 1
+
+    instabilidadeGeral = round(
+        (capturasProblema / totalCapturas) * 100,
+        2
+    ) if totalCapturas > 0 else 0
+
+    estabilidadeGeral = round(
+        100 - instabilidadeGeral,
+        2
+    )
+
+    meta = 80
+
+    metaAtual = max(
+        round(meta - estabilidadeGeral, 2),
+        0
+    )
+
+    modulosLista = []
+
+    for nome, dados in modulos_analise.items():
+
+        totalModulo = (
+            dados["ativos"] +
+            dados["inativos"]
+        )
+
+        problemas = (
+            dados["alerta"] +
+            dados["critico"]
+        )
+
+        instabilidade = round(
+            (problemas / totalModulo) * 100,
+            2
+        ) if totalModulo > 0 else 0
+
+        estabilidade = round(
+            100 - instabilidade,
+            2
+        )
+
+        modulosLista.append({
+
+            "nome": nome,
+
+            "ativos": dados["ativos"],
+            "inativos": dados["inativos"],
+
+            "ok": dados["ok"],
+            "alerta": dados["alerta"],
+            "critico": dados["critico"],
+
+            "usoPercentual": 0,
+
+            "instabilidade": instabilidade,
+            "estabilidade": estabilidade
+        })
+
+    caminhoModelo = (
+    f"{base_path}"
+    f"modelos/"
+    f"modelo_{id_modelo}.json"
+)
+
+    try:
+
+        response = s3.get_object(
+            Bucket=bucket,
+            Key=caminhoModelo
+        )
+
+        json_antigo = json.loads(
+            response["Body"].read().decode("utf-8")
+        )
+
+    except Exception:
+
+        json_antigo = None
+
+    if json_antigo:
+
+        modulos_antigos = {
+            m["nome"]: m
+            for m in json_antigo["modulos"]
+        }
+
+        primeiraAntiga = pd.to_datetime(
+        json_antigo["periodo"]["inicio"]
+    )
+
+        ultimaAntiga = pd.to_datetime(
+            json_antigo["periodo"]["fim"]
+        )
+
+        primeiraCaptura = min(
+            primeiraCaptura,
+            primeiraAntiga
+        )
+
+        ultimaCaptura = max(
+            ultimaCaptura,
+            ultimaAntiga
+        )
+
+        diasCaptura = max(
+            (ultimaCaptura - primeiraCaptura).days,
+            1
+        )
+
+        for modulo in modulosLista:
+
+            nome = modulo["nome"]
+
+            if nome in modulos_antigos:
+
+                antigo = modulos_antigos[nome]
+
+                modulo["ativos"] += antigo["ativos"]
+                modulo["inativos"] += antigo["inativos"]
+
+                modulo["ok"] += antigo["ok"]
+                modulo["alerta"] += antigo["alerta"]
+                modulo["critico"] += antigo["critico"]
+
+    for modulo in modulosLista:
+
+        ativos = modulo["ativos"]
+        inativos = modulo["inativos"]
+
+        totalModulo = ativos + inativos
+
+        alertas = modulo["alerta"]
+
+        modulo["usoPercentual"] = round(
+            (ativos / totalModulo) * 100,
+            2
+        ) if totalModulo > 0 else 0
+
+    moduloMaisUtilizado = max(
+        modulosLista,
+        key=lambda x: x["ativos"]
+    )
+
+    moduloMaisCritico = max(
+        modulosLista,
+        key=lambda x: (
+            x["alerta"]
+            +
+            x["critico"]
+        )
+    )
+
+    totalAlertas = sum(
+        modulo["alerta"] + modulo["critico"]
+        for modulo in modulosLista
+    )
+
+    totalCapturasSistema = len(df_modelo)
+
+    estabilidadeGeral = max(
+        round(
+            100 - (
+                (totalAlertas / totalCapturasSistema)
+                * 100
+            ),
+            2
+        ),
+        0
+    )
+
+    meta = 80
+
+    metaAtual = max(
+        round(meta - estabilidadeGeral, 2),
+        0
+    )
+
+    modulos_json = {
+
+        "modelo": {
+            "id": id_modelo,
+            "nome": nome_modelo
+        },
+
+        "ultimaAtualizacao": str(datetime.now()),
+
+        "periodo": {
+
+            "diasCaptura": diasCaptura,
+
+            "inicio": str(primeiraCaptura),
+
+            "fim": str(ultimaCaptura)
+        },
+
+        "kpis": {
+
+            "moduloMaisUtilizado":
+                moduloMaisUtilizado["nome"],
+
+            "frequenciaMaisUtilizada":
+                moduloMaisUtilizado["usoPercentual"],
+
+            "moduloMaisCritico":
+                moduloMaisCritico["nome"],
+
+            "ocorrenciasCriticas":
+                (
+                    moduloMaisCritico["alerta"]
+                    +
+                    moduloMaisCritico["critico"]
+                ),
+
+            "estabilidadeGeral":
+                estabilidadeGeral,
+
+            "metaAtual":
+                metaAtual,
+
+            "meta":
+                meta
+        },
+
+        "modulos": modulosLista
+    }
+
+    caminhoModelo = (
+        f"{base_path}"
+        f"modelos/"
+        f"modelo_{id_modelo}.json"
+    )
+
+    s3.put_object(
+        Bucket=bucket,
+        Key=caminhoModelo,
+        Body=json.dumps(
+            modulos_json,
+            ensure_ascii=False,
+            indent=4
+        ),
+        ContentType="application/json"
+    )
+
+    # ========== FIM DA DASH DO PEDRO SOUSA ==========
 
     # ======= DASHBOARD DIEGO HENRIQUE ========
 
@@ -448,7 +860,7 @@ def client(df, cursor):
     )
     alertasDisco = int(
         (
-            df_semana["disk_used"].apply(lambda x: status(x, limite_disk, "disco"))
+            df_semana["disk_percent"].apply(lambda x: status(x, limite_disk, "disco"))
             == "Alerta"
         ).sum()
     )
@@ -470,7 +882,7 @@ def client(df, cursor):
         == "Crítico"
     ).sum()
     criticosDisco = (
-        df_semana["disk_used"].apply(lambda x: status(x, limite_disk, "disco"))
+        df_semana["disk_percent"].apply(lambda x: status(x, limite_disk, "disco"))
         == "Crítico"
     ).sum()
     criticosRede = (
@@ -657,7 +1069,7 @@ def client(df, cursor):
 
     ########################################### Dash Maria:
 
-    caminhoJsonMonitor = f"{caminho_monitor}.json"
+    caminhoJsonMonitor = caminho_monitor
      
     #dataAtual = datetime.now()
     #semanaAtual = dataAtual.isocalendar()[1]  # Pega o número da semana do ano
@@ -762,6 +1174,7 @@ def client(df, cursor):
     print(f"Hospital: {id_hospital}")
     print(f"Unidade: {id_unidade}")
     print(f"Monitor: {id_monitor}")
+    print(f"Modelo: {nome_modelo}")
 
     return resultado
 
