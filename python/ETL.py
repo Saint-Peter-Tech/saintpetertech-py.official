@@ -8,6 +8,7 @@ from botocore.exceptions import ClientError
 import logging
 from io import StringIO
 from datetime import datetime, timedelta, date, time
+import calendar
 
 print("Iniciando ETL...")
 
@@ -140,6 +141,264 @@ def buscar_hierarquia_monitor(cursor, id_monitor):
         "modelo": resultado[8],
     }
 
+def buscar_quantidade_unidades(cursor, id_empresa):
+    
+    query = """
+        SELECT id_unidade
+        FROM unidades
+        JOIN hospitais
+        ON unidades.fk_hospital = hospitais.id_hospital
+        WHERE hospitais.fk_empresa = %s;
+    """
+
+    cursor.execute(query, (id_empresa,))
+    resultados = cursor.fetchall()
+
+    if not resultado:
+        return []
+    
+    lista_unidades = []
+
+    for resultado in resultados:
+        lista_unidades.append({
+            "id_unidade": resultado[0]
+        })
+
+    return lista_unidades
+
+def buscar_hospitais_5alertas(cursor, df, id_empresa, status_func, inicio, fim, minimo=5):
+
+    cursor.execute(
+        """
+        SELECT m.id_monitor, h.id_hospital, h.nome_hospital
+        FROM monitores m
+        JOIN unidades u  ON m.fk_unidade = u.id_unidade
+        JOIN hospitais h ON u.fk_hospital = h.id_hospital
+        WHERE h.fk_empresa = %s
+        """,
+        (id_empresa,),
+    )
+    monitor_para_hospital = {}
+    nome_hospital = {}
+    for id_monitor, id_hospital, nome in cursor.fetchall():
+        monitor_para_hospital[id_monitor] = id_hospital
+        nome_hospital[id_hospital] = nome
+
+    cursor.execute(
+        """
+        SELECT cm.fk_monitor, c.nome_componente, cm.limite
+        FROM componente_monitor cm
+        JOIN componentes c ON cm.fk_componente = c.id_componente
+        JOIN monitores m   ON cm.fk_monitor = m.id_monitor
+        WHERE m.fk_empresa = %s
+        """,
+        (id_empresa,),
+    )
+    limites_por_monitor = {}
+    for fk_monitor, nome_comp, limite in cursor.fetchall():
+        limites_por_monitor.setdefault(fk_monitor, {})[nome_comp.lower()] = float(limite)
+
+    df_janela = df[(df["timestamp"] >= inicio) & (df["timestamp"] < fim)]
+
+    mapa = {
+        "cpu_percent":  ("cpu",         "cpu"),
+        "ram_percent":  ("ram",         "ram"),
+        "disk_percent": ("disco_usado", "disco"),
+        "banda_larga":  ("rede",        "rede"),
+    }
+
+    alertas_por_hospital = {}
+    for _, row in df_janela.iterrows():
+        id_hospital = monitor_para_hospital.get(int(row["id_monitor"]))
+        if id_hospital is None:
+            continue
+        limites = limites_por_monitor.get(int(row["id_monitor"]), {})
+        for coluna, (chave_limite, tipo) in mapa.items():
+            if status_func(row[coluna], limites.get(chave_limite), tipo) == "Alerta":
+                alertas_por_hospital[id_hospital] = alertas_por_hospital.get(id_hospital, 0) + 1
+
+    resultado = [
+        {"id_hospital": h, "nome_hospital": nome_hospital.get(h, "Desconhecido"), "qtdAlertas": q}
+        for h, q in alertas_por_hospital.items()
+        if q > minimo
+    ]
+    resultado.sort(key=lambda x: x["qtdAlertas"], reverse=True)
+
+    return resultado, len(resultado)
+
+def heatmap_quedas(cursor, df_hist, id_empresa, dias=30, limite_queda=0.01):
+    """
+    Quedas (banda_larga <= limite_queda) por turno x dia da semana, por unidade,
+    nos últimos `dias`. Chave "0" = todas as unidades (soma da empresa).
+    """
+    cursor.execute(
+        """
+        SELECT m.id_monitor, u.id_unidade, u.nome_unidade
+        FROM monitores m
+        JOIN unidades u  ON m.fk_unidade = u.id_unidade
+        JOIN hospitais h ON u.fk_hospital = h.id_hospital
+        WHERE h.fk_empresa = %s
+        """,
+        (id_empresa,),
+    )
+    monitor_para_unidade, nome_unidade = {}, {}
+    for id_monitor, id_unidade, nome in cursor.fetchall():
+        monitor_para_unidade[id_monitor] = id_unidade
+        nome_unidade[id_unidade] = nome
+
+    turnos = ["Madrugada", "Manhã", "Tarde", "Noite"]
+    dias_semana = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"]
+
+    def turno_de(hora):
+        if hora < 6:  return "Madrugada"
+        if hora < 12: return "Manhã"
+        if hora < 18: return "Tarde"
+        return "Noite"
+
+    matrizes = {0: {t: [0] * 7 for t in turnos}}
+    for uid in nome_unidade:
+        matrizes[uid] = {t: [0] * 7 for t in turnos}
+
+    corte = datetime.now() - timedelta(days=dias)
+    df_janela = df_hist[df_hist["timestamp"] >= corte]
+
+    for _, row in df_janela.iterrows():
+        if row["banda_larga"] > limite_queda:
+            continue
+        uid = monitor_para_unidade.get(int(row["id_monitor"]))
+        if uid is None:
+            continue
+        ts = row["timestamp"]
+        t = turno_de(ts.hour)
+        d = (ts.weekday() + 1) % 7  
+        matrizes[uid][t][d] += 1
+        matrizes[0][t][d] += 1     
+
+    resultado = {}
+    for uid, matriz in matrizes.items():
+        resultado[str(uid)] = {
+            "nome": "Todas as unidades" if uid == 0 else nome_unidade.get(uid, "Desconhecida"),
+            "turnos": turnos,
+            "dias": dias_semana,
+            "matriz": matriz,
+        }
+    return resultado
+
+def barras_alertas_semana(cursor, df_hist, id_empresa, status_func):
+    """
+    Alertas (status == "Alerta") por semana do mês corrente, por unidade.
+    Chave "0" = todas as unidades.
+    """
+    cursor.execute(
+        """
+        SELECT m.id_monitor, u.id_unidade, u.nome_unidade
+        FROM monitores m
+        JOIN unidades u  ON m.fk_unidade = u.id_unidade
+        JOIN hospitais h ON u.fk_hospital = h.id_hospital
+        WHERE h.fk_empresa = %s
+        """,
+        (id_empresa,),
+    )
+    monitor_para_unidade, nome_unidade = {}, {}
+    for id_monitor, id_unidade, nome in cursor.fetchall():
+        monitor_para_unidade[id_monitor] = id_unidade
+        nome_unidade[id_unidade] = nome
+
+    cursor.execute(
+        """
+        SELECT cm.fk_monitor, c.nome_componente, cm.limite
+        FROM componente_monitor cm
+        JOIN componentes c ON cm.fk_componente = c.id_componente
+        JOIN monitores m   ON cm.fk_monitor = m.id_monitor
+        WHERE m.fk_empresa = %s
+        """,
+        (id_empresa,),
+    )
+    limites_por_monitor = {}
+    for fk_monitor, nome_comp, limite in cursor.fetchall():
+        limites_por_monitor.setdefault(fk_monitor, {})[nome_comp.lower()] = float(limite)
+
+    mapa = {
+        "cpu_percent":  ("cpu",         "cpu"),
+        "ram_percent":  ("ram",         "ram"),
+        "disk_percent": ("disco_usado", "disco"),
+        "banda_larga":  ("rede",        "rede"),
+    }
+
+    agora = datetime.now()
+    df_mes = df_hist[
+        (df_hist["timestamp"].dt.year == agora.year)
+        & (df_hist["timestamp"].dt.month == agora.month)
+    ]
+
+    n_semanas = (calendar.monthrange(agora.year, agora.month)[1] - 1) // 7 + 1
+    alertas = {0: {}}
+    for uid in nome_unidade:
+        alertas[uid] = {}
+
+    for _, row in df_mes.iterrows():
+        uid = monitor_para_unidade.get(int(row["id_monitor"]))
+        if uid is None:
+            continue
+        limites = limites_por_monitor.get(int(row["id_monitor"]), {})
+        semana = (row["timestamp"].day - 1) // 7 + 1
+
+        qtd = 0
+        for coluna, (chave_limite, tipo) in mapa.items():
+            if status_func(row[coluna], limites.get(chave_limite), tipo) == "Alerta":
+                qtd += 1
+        if qtd:
+            alertas[uid][semana] = alertas[uid].get(semana, 0) + qtd
+            alertas[0][semana]   = alertas[0].get(semana, 0) + qtd
+
+    resultado = {}
+    for uid, por_semana in alertas.items():
+        resultado[str(uid)] = {
+            "nome": "Todas as unidades" if uid == 0 else nome_unidade.get(uid, "Desconhecida"),
+            "mes": agora.strftime("%Y-%m"),
+            "semanas": [
+                {"semana": s, "label": f"Semana {s}", "alertas": por_semana.get(s, 0)}
+                for s in range(1, n_semanas + 1)
+            ],
+        }
+    return resultado
+
+def buscar_unidades_quedas(cursor, df, id_empresa, inicio, fim, limite_queda=0.01):
+
+    cursor.execute(
+        """
+        SELECT m.id_monitor, u.id_unidade, u.nome_unidade
+        FROM monitores m
+        JOIN unidades u  ON m.fk_unidade = u.id_unidade
+        JOIN hospitais h ON u.fk_hospital = h.id_hospital
+        WHERE h.fk_empresa = %s
+        """,
+        (id_empresa,),
+    )
+    monitor_para_unidade = {}
+    nome_unidade = {}
+    for id_monitor, id_unidade, nome in cursor.fetchall():
+        monitor_para_unidade[id_monitor] = id_unidade
+        nome_unidade[id_unidade] = nome
+
+    df_janela = df[(df["timestamp"] >= inicio) & (df["timestamp"] < fim)]
+
+    quedas_por_unidade = {}
+    for _, row in df_janela.iterrows():
+        if row["banda_larga"] <= limite_queda:
+            id_unidade = monitor_para_unidade.get(int(row["id_monitor"]))
+            if id_unidade is None:
+                continue
+            quedas_por_unidade[id_unidade] = quedas_por_unidade.get(id_unidade, 0) + 1
+
+    lista = [
+        {"id_unidade": u, "nome_unidade": nome_unidade.get(u, "Desconhecida"), "qtdQuedas": q}
+        for u, q in quedas_por_unidade.items()
+    ]
+    lista.sort(key=lambda x: x["qtdQuedas"], reverse=True)
+
+    return lista
+
 def buscar_rede_total_unidade(cursor, id_unidade):
     query = """
         SELECT rede_total
@@ -174,6 +433,28 @@ def preparar_raw(df):
     )
     df = df.dropna(subset=["timestamp"])
     df = df.sort_values(["id_monitor", "timestamp"])
+    return df
+
+def carregar_trusted(dia_inicio, dia_fim):
+    """Lê e concatena os CSVs da camada trusted entre duas datas (inclusive)."""
+    frames = []
+    dia = dia_inicio
+    while dia <= dia_fim:
+        key = f"trusted/{dia.year}/{dia.month:02d}/{dia.day:02d}/trusted.csv"
+        try:
+            resp = s3.get_object(Bucket=bucket, Key=key)
+            conteudo = resp["Body"].read().decode("utf-8")
+            frames.append(pd.read_csv(StringIO(conteudo)))
+        except Exception:
+            pass  # dia sem arquivo, ignora
+        dia += timedelta(days=1)
+
+    if not frames:
+        return pd.DataFrame()
+
+    df = pd.concat(frames, ignore_index=True)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df = df.dropna(subset=["timestamp"])
     return df
 
 
@@ -438,14 +719,47 @@ def client(df, cursor):
     caminho_monitor = f"{unidade_path}" f"monitor_{id_monitor}.json"
 
     # Dash Philipi:
+    agora      = datetime.now()
+    ini_hoje   = agora - timedelta(hours=24)
+    ini_ontem  = agora - timedelta(hours=48)
+    ini_semana = agora - timedelta(days=7)
+
+    # histórico real — agora 35 dias, pra cobrir heatmap (30d) e o mês corrente
+    df_hist = carregar_trusted((agora - timedelta(days=35)).date(), agora.date())
+    if df_hist.empty:                       # primeira execução, sem trusted ainda
+        df_hist = preparar_raw(df)          # usa ao menos o lote atual, não quebra
+
+    ranking_quedas = buscar_unidades_quedas(cursor, df_hist, id_empresa, ini_semana, agora)
+    unidade_top = ranking_quedas[0] if ranking_quedas else {"nome_unidade": "Nenhuma", "qtdQuedas": 0}
+
+    lista_hoje, total_hoje  = buscar_hospitais_5alertas(cursor, df_hist, id_empresa, status, ini_hoje, agora)
+    _,          total_ontem = buscar_hospitais_5alertas(cursor, df_hist, id_empresa, status, ini_ontem, ini_hoje)
+
+    heatmap = heatmap_quedas(cursor, df_hist, id_empresa, dias=30)
+    barras  = barras_alertas_semana(cursor, df_hist, id_empresa, status)
 
     controle_json = {
-        "empresa": id_empresa,
-        "ultimaAtualizacao": str(datetime.now()),
-        "monitor": id_monitor,
+        "empresa": {"id": id_empresa, "nome": hierarquia["empresa"]},
+        "ultimaAtualizacao": str(agora),
+        "hospitaisMais5Alertas": {
+            "hoje": total_hoje, "ontem": total_ontem, "total": total_hoje, "lista": lista_hoje,
+        },
+        "unidadesQuedas": {
+            "unidadeTop": {"nome": unidade_top["nome_unidade"], "qtdQuedas": unidade_top["qtdQuedas"]},
+            "ranking": ranking_quedas,
+        },
+        "graficos": {
+            "heatmapQuedas":   heatmap,   # {"0": todas, "1": unidade 1, ...}
+            "alertasPorSemana": barras,
+        },
     }
 
-    salvar_s3(f"{base_path}controle.json", controle_json, tipo="json")
+    s3.put_object(
+        Bucket=bucket,
+        Key=f"{base_path}controle.json",
+        Body=json.dumps(controle_json, ensure_ascii=False, indent=4),
+        ContentType="application/json",
+    )
 
    # ======= DASHBOARD DIEGO SEITI ========
 
