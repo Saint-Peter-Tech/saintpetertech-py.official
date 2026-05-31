@@ -137,7 +137,7 @@ def buscar_hierarquia_monitor(cursor, id_monitor):
         "hospital": resultado[5],
         "unidade": resultado[6],
         "id_modelo": resultado[7],
-        "modelo": resultado[8]
+        "modelo": resultado[8],
     }
 
 def buscar_rede_total_unidade(cursor, id_unidade):
@@ -244,9 +244,7 @@ def trusted(df):
 
     df["disk_total"] = (df["disk_total"] / 1024**3).round(2)
 
-    df["disk_percent"] = (
-    (df["disk_used"] / df["disk_total"]) * 100
-    ).round(2)
+    df["disk_percent"] = ((df["disk_used"] / df["disk_total"]) * 100).round(2)
 
     hoje = datetime.now()
 
@@ -282,7 +280,7 @@ def client(df, cursor):
 
     id_monitor = int(df_client["id_monitor"].iloc[-1])
 
-    hierarquia = buscar_hierarquia_monitor(cursor, id_monitor)    
+    hierarquia = buscar_hierarquia_monitor(cursor, id_monitor)
 
     if not hierarquia:
         print("Monitor não encontrado no banco")
@@ -449,11 +447,251 @@ def client(df, cursor):
 
     salvar_s3(f"{base_path}controle.json", controle_json, tipo="json")
 
-    # Dash Diego Seiti:
+   # ======= DASHBOARD DIEGO SEITI ========
 
-    modelos_json = {"monitor": id_monitor}
+    caminhoJsonModelos = (f"client/" f"empresa_{hierarquia['id_empresa']}/" f"modelos/modelos.json")
 
-    salvar_s3(f"{base_path}modelos.json", modelos_json, tipo="json")
+    capturasTotais = len(df_client)
+
+    alertasCpu = int(
+        (
+            df_client["cpu_percent"].apply(lambda x: status(x, limite_cpu, "cpu"))
+            == "Alerta"
+        ).sum()
+    )
+    alertasRam = int(
+        (
+            df_client["ram_percent"].apply(lambda x: status(x, limite_ram, "ram"))
+            == "Alerta"
+        ).sum()
+    )
+    alertasRede = int(
+        (
+            df_client["banda_larga"].apply(lambda x: status(x, limite_rede, "rede"))
+            == "Alerta"
+        ).sum()
+    )
+
+    criticosCPU = (
+        df_client["cpu_percent"].apply(lambda x: status(x, limite_cpu, "cpu"))
+        == "Crítico"
+    ).sum()
+    criticosRAM = (
+        df_client["ram_percent"].apply(lambda x: status(x, limite_ram, "ram"))
+        == "Crítico"
+    ).sum()
+    criticosRede = (
+        df_client["banda_larga"].apply(lambda x: status(x, limite_rede, "rede"))
+        == "Crítico"
+    ).sum()
+
+    status_cpu = df_client["cpu_percent"].apply(
+        lambda x: status(x, limite_cpu, "cpu")
+    )
+
+    status_ram = df_client["ram_percent"].apply(
+        lambda x: status(x, limite_ram, "ram")
+    )
+
+    status_rede = df_client["banda_larga"].apply(
+        lambda x: status(x, limite_rede, "rede")
+    )
+
+    linhas_com_alerta = (
+        (status_cpu != "OK")
+        | (status_ram != "OK")
+        | (status_rede != "OK")
+    )
+
+    qtdCapturasAlerta = int(linhas_com_alerta.sum())
+
+    try:
+
+        response = s3.get_object(
+            Bucket=bucket,
+            Key=caminhoJsonModelos
+        )
+
+        conteudo = response["Body"].read().decode("utf-8")
+
+        jsonModelos = json.loads(conteudo)
+
+    except Exception:
+
+        jsonModelos = {
+            "modelos": {}
+        }
+
+    idModelo = str(hierarquia["id_modelo"])
+
+    if idModelo not in jsonModelos["modelos"]:
+
+        jsonModelos["modelos"][idModelo] = {
+
+            "id_modelo": hierarquia["id_modelo"],
+            "nome": hierarquia["modelo"],
+
+            "capturas_totais": 0,
+            "capturas_alertas": 0,
+            "pct_alertas": 0,
+
+            "alertas_cpu": 0,
+            "criticos_cpu": 0,
+            "pct_alertas_cpu": 0,
+            "pct_criticos_cpu": 0,
+            "pct_ok_cpu": 0,
+            "origem_alertas_cpu": 0,
+            "healthscore_cpu": 100,
+
+            "alertas_ram": 0,
+            "criticos_ram": 0,
+            "pct_alertas_ram": 0,
+            "pct_criticos_ram": 0,
+            "pct_ok_ram": 0,
+            "origem_alertas_ram": 0,
+            "healthscore_cpu": 100,
+
+            "alertas_rede": 0,
+            "criticos_rede": 0,
+            "pct_alertas_rede": 0,
+            "pct_criticos_rede": 0,
+            "pct_ok_rede": 0,
+            "origem_alertas_rede": 0,
+            "healthscore_cpu": 100,
+
+            "cpu_acima_limite": 0,
+            "ram_acima_limite": 0,
+            "rede_acima_limite": 0,
+
+            "healthscore": 100
+        }
+
+    modelo = jsonModelos["modelos"][idModelo]
+
+    modelo["capturas_totais"] += capturasTotais
+    modelo["capturas_alertas"] += qtdCapturasAlerta
+    modelo["pct_alertas"] = round(
+        modelo["capturas_alertas"] * 100 / modelo["capturas_totais"],
+        2
+    )
+
+    modelo["alertas_cpu"] += int(alertasCpu)
+    modelo["criticos_cpu"] += int(criticosCPU)
+
+    modelo["alertas_ram"] += int(alertasRam)
+    modelo["criticos_ram"] += int(criticosRAM)
+
+    modelo["alertas_rede"] += int(alertasRede)
+    modelo["criticos_rede"] += int(criticosRede)
+
+    totalCpu = (
+        modelo["alertas_cpu"]
+        + modelo["criticos_cpu"]
+    )
+
+    totalRam = (
+        modelo["alertas_ram"]
+        + modelo["criticos_ram"]
+    )
+
+    totalRede = (
+        modelo["alertas_rede"]
+        + modelo["criticos_rede"]
+    )
+
+    totalCapturas = modelo["capturas_totais"]
+
+    modelo["cpu_acima_limite"] = round(
+        (totalCpu * 100) / totalCapturas,
+        2
+    )
+
+    modelo["ram_acima_limite"] = round(
+        (totalRam * 100) / totalCapturas,
+        2
+    )
+
+    modelo["rede_acima_limite"] = round(
+        (totalRede * 100) / totalCapturas,
+        2
+    )
+
+    pctAlertaCpu = (
+        modelo["alertas_cpu"] * 100
+    ) / totalCapturas
+
+    pctCriticoCpu = (
+        modelo["criticos_cpu"] * 100
+    ) / totalCapturas
+
+    pctAlertaRam = (
+        modelo["alertas_ram"] * 100
+    ) / totalCapturas
+
+    pctCriticoRam = (
+        modelo["criticos_ram"] * 100
+    ) / totalCapturas
+
+    pctAlertaRede = (
+        modelo["alertas_rede"] * 100
+    ) / totalCapturas
+
+    pctCriticoRede = (
+        modelo["criticos_rede"] * 100
+    ) / totalCapturas
+
+    healthScoreCpu = (100 - (pctAlertaCpu + 2 * pctCriticoCpu))
+    healthScoreRam = (100 - (pctAlertaRam + 2 * pctCriticoRam))
+    healthScoreRede = (100 - (pctAlertaRede + 2 * pctCriticoRede))
+
+    modelo["healthscore_cpu"] = round(max(0, min(100, healthScoreCpu)), 2)
+    modelo["healthscore_ram"] = round(max(0, min(100, healthScoreRam)), 2)
+    modelo["healthscore_rede"] = round(max(0, min(100, healthScoreRede)), 2)
+
+    healthScore = (
+        + (modelo["healthscore_cpu"] * 0.25)
+        + (modelo["healthscore_ram"] * 0.25)
+        + (modelo["healthscore_rede"] * 0.5)
+    )
+
+    modelo["healthscore"] = round(
+        max(0, min(100, healthScore)),
+        2
+    )
+
+    modelo["pct_alertas_cpu"] = round(pctAlertaCpu, 1)
+    modelo["pct_criticos_cpu"] = round(pctCriticoCpu, 1)
+    modelo["pct_ok_cpu"] = 100 - (modelo["pct_alertas_cpu"] + modelo["pct_criticos_cpu"])
+    modelo["pct_alertas_ram"] = round(pctAlertaRam, 1)
+    modelo["pct_criticos_ram"] = round(pctCriticoRam, 1)
+    modelo["pct_ok_ram"] = 100 - (modelo["pct_alertas_ram"] + modelo["pct_criticos_ram"])
+    modelo["pct_alertas_rede"] = round(pctAlertaRede, 1)
+    modelo["pct_criticos_rede"] = round(pctCriticoRede, 1)
+    modelo["pct_ok_rede"] = 100 - (modelo["pct_alertas_rede"] + modelo["pct_criticos_rede"])
+
+    alertasTotais = totalCpu + totalRam + totalRede
+
+    modelo["origem_alertas_cpu"] = round(
+        totalCpu * 100 / alertasTotais, 2
+    )
+    modelo["origem_alertas_ram"] = round(
+        totalRam * 100 / alertasTotais, 2
+    )
+    modelo["origem_alertas_rede"] = round(
+        totalRede * 100 / alertasTotais, 2
+    )
+
+    s3.put_object(
+        Bucket=bucket,
+        Key=caminhoJsonModelos,
+        Body=json.dumps(
+            jsonModelos, 
+            ensure_ascii=False
+        ),
+        ContentType="application/json",
+    )
+
+    # ======= FIM DA DASHBOARD DIEGO SEITI ========
 
     # ======= DASHBOARD PEDRO SOUSA ========
 
@@ -461,33 +699,21 @@ def client(df, cursor):
 
     nome_modelo = hierarquia["modelo"]
 
-    monitores_modelo = buscar_monitores_modelo(
-        cursor,
-        id_modelo
-    )
+    monitores_modelo = buscar_monitores_modelo(cursor, id_modelo)
 
     df_modelo = preparar_raw(df)
 
-    df_modelo = df_modelo[
-        df_modelo["id_monitor"].isin(monitores_modelo)
-    ]
+    df_modelo = df_modelo[df_modelo["id_monitor"].isin(monitores_modelo)]
 
     if df_modelo.empty:
         print("Sem dados para o modelo")
         return
 
-    primeiraCaptura = pd.to_datetime(
-        df_modelo["timestamp"].min()
-    )
+    primeiraCaptura = pd.to_datetime(df_modelo["timestamp"].min())
 
-    ultimaCaptura = pd.to_datetime(
-        df_modelo["timestamp"].max()
-    )
+    ultimaCaptura = pd.to_datetime(df_modelo["timestamp"].max())
 
-    diasCaptura = max(
-        (ultimaCaptura - primeiraCaptura).days,
-        1
-    )
+    diasCaptura = max((ultimaCaptura - primeiraCaptura).days, 1)
 
     modulos_map = {
         "BPM": "bpm_status",
@@ -498,7 +724,7 @@ def client(df, cursor):
         "PIC": "pic_status",
         "PVC": "pvc_status",
         "ECG": "ecg_status",
-        "ETCO2": "etco2_status"
+        "ETCO2": "etco2_status",
     }
 
     modulos_analise = {}
@@ -511,43 +737,22 @@ def client(df, cursor):
             "ok": 0,
             "alerta": 0,
             "critico": 0,
-            "usoPercentual": 0
+            "usoPercentual": 0,
         }
 
     totalCapturas = len(df_modelo)
 
     for _, row in df_modelo.iterrows():
 
-        statuscpu = status(
-            row["cpu_percent"],
-            limite_cpu,
-            "cpu"
-        )
+        statuscpu = status(row["cpu_percent"], limite_cpu, "cpu")
 
-        statusram = status(
-            row["ram_percent"],
-            limite_ram,
-            "ram"
-        )
+        statusram = status(row["ram_percent"], limite_ram, "ram")
 
-        statusdisco = status(
-            row["disk_percent"],
-            limite_disk,
-            "disco"
-        )
+        statusdisco = status(row["disk_percent"], limite_disk, "disco")
 
-        statusrede = status(
-            row["banda_larga"],
-            limite_rede,
-            "rede"
-        )
+        statusrede = status(row["banda_larga"], limite_rede, "rede")
 
-        statuses = [
-            statuscpu,
-            statusram,
-            statusdisco,
-            statusrede
-        ]
+        statuses = [statuscpu, statusram, statusdisco, statusrede]
 
         if "Crítico" in statuses:
             statusgeral = "Crítico"
@@ -579,17 +784,10 @@ def client(df, cursor):
 
                 modulos_analise[nome]["inativos"] += 1
 
-    moduloMaisUtilizado = max(
-        modulos_analise.items(),
-        key=lambda x: x[1]["ativos"]
-    )
+    moduloMaisUtilizado = max(modulos_analise.items(), key=lambda x: x[1]["ativos"])
 
     moduloMaisCritico = max(
-        modulos_analise.items(),
-        key=lambda x: (
-            x[1]["alerta"] +
-            x[1]["critico"]
-        )
+        modulos_analise.items(), key=lambda x: (x[1]["alerta"] + x[1]["critico"])
     )
 
     capturasProblema = 0
@@ -600,86 +798,57 @@ def client(df, cursor):
             status(row["cpu_percent"], limite_cpu, "cpu"),
             status(row["ram_percent"], limite_ram, "ram"),
             status(row["disk_percent"], limite_disk, "disco"),
-            status(row["banda_larga"], limite_rede, "rede")
+            status(row["banda_larga"], limite_rede, "rede"),
         ]
 
         if "Alerta" in statuses or "Crítico" in statuses:
             capturasProblema += 1
 
-    instabilidadeGeral = round(
-        (capturasProblema / totalCapturas) * 100,
-        2
-    ) if totalCapturas > 0 else 0
-
-    estabilidadeGeral = round(
-        100 - instabilidadeGeral,
-        2
+    instabilidadeGeral = (
+        round((capturasProblema / totalCapturas) * 100, 2) if totalCapturas > 0 else 0
     )
+
+    estabilidadeGeral = round(100 - instabilidadeGeral, 2)
 
     meta = 80
 
-    metaAtual = max(
-        round(meta - estabilidadeGeral, 2),
-        0
-    )
+    metaAtual = max(round(meta - estabilidadeGeral, 2), 0)
 
     modulosLista = []
 
     for nome, dados in modulos_analise.items():
 
-        totalModulo = (
-            dados["ativos"] +
-            dados["inativos"]
+        totalModulo = dados["ativos"] + dados["inativos"]
+
+        problemas = dados["alerta"] + dados["critico"]
+
+        instabilidade = (
+            round((problemas / totalModulo) * 100, 2) if totalModulo > 0 else 0
         )
 
-        problemas = (
-            dados["alerta"] +
-            dados["critico"]
+        estabilidade = round(100 - instabilidade, 2)
+
+        modulosLista.append(
+            {
+                "nome": nome,
+                "ativos": dados["ativos"],
+                "inativos": dados["inativos"],
+                "ok": dados["ok"],
+                "alerta": dados["alerta"],
+                "critico": dados["critico"],
+                "usoPercentual": 0,
+                "instabilidade": instabilidade,
+                "estabilidade": estabilidade,
+            }
         )
 
-        instabilidade = round(
-            (problemas / totalModulo) * 100,
-            2
-        ) if totalModulo > 0 else 0
-
-        estabilidade = round(
-            100 - instabilidade,
-            2
-        )
-
-        modulosLista.append({
-
-            "nome": nome,
-
-            "ativos": dados["ativos"],
-            "inativos": dados["inativos"],
-
-            "ok": dados["ok"],
-            "alerta": dados["alerta"],
-            "critico": dados["critico"],
-
-            "usoPercentual": 0,
-
-            "instabilidade": instabilidade,
-            "estabilidade": estabilidade
-        })
-
-    caminhoModelo = (
-    f"{base_path}"
-    f"modelos/"
-    f"modelo_{id_modelo}.json"
-)
+    caminhoModelo = f"{base_path}" f"modelos/" f"modelo_{id_modelo}.json"
 
     try:
 
-        response = s3.get_object(
-            Bucket=bucket,
-            Key=caminhoModelo
-        )
+        response = s3.get_object(Bucket=bucket, Key=caminhoModelo)
 
-        json_antigo = json.loads(
-            response["Body"].read().decode("utf-8")
-        )
+        json_antigo = json.loads(response["Body"].read().decode("utf-8"))
 
     except Exception:
 
@@ -687,33 +856,17 @@ def client(df, cursor):
 
     if json_antigo:
 
-        modulos_antigos = {
-            m["nome"]: m
-            for m in json_antigo["modulos"]
-        }
+        modulos_antigos = {m["nome"]: m for m in json_antigo["modulos"]}
 
-        primeiraAntiga = pd.to_datetime(
-        json_antigo["periodo"]["inicio"]
-    )
+        primeiraAntiga = pd.to_datetime(json_antigo["periodo"]["inicio"])
 
-        ultimaAntiga = pd.to_datetime(
-            json_antigo["periodo"]["fim"]
-        )
+        ultimaAntiga = pd.to_datetime(json_antigo["periodo"]["fim"])
 
-        primeiraCaptura = min(
-            primeiraCaptura,
-            primeiraAntiga
-        )
+        primeiraCaptura = min(primeiraCaptura, primeiraAntiga)
 
-        ultimaCaptura = max(
-            ultimaCaptura,
-            ultimaAntiga
-        )
+        ultimaCaptura = max(ultimaCaptura, ultimaAntiga)
 
-        diasCaptura = max(
-            (ultimaCaptura - primeiraCaptura).days,
-            1
-        )
+        diasCaptura = max((ultimaCaptura - primeiraCaptura).days, 1)
 
         for modulo in modulosLista:
 
@@ -739,114 +892,55 @@ def client(df, cursor):
 
         alertas = modulo["alerta"]
 
-        modulo["usoPercentual"] = round(
-            (ativos / totalModulo) * 100,
-            2
-        ) if totalModulo > 0 else 0
-
-    moduloMaisUtilizado = max(
-        modulosLista,
-        key=lambda x: x["ativos"]
-    )
-
-    moduloMaisCritico = max(
-        modulosLista,
-        key=lambda x: (
-            x["alerta"]
-            +
-            x["critico"]
+        modulo["usoPercentual"] = (
+            round((ativos / totalModulo) * 100, 2) if totalModulo > 0 else 0
         )
-    )
 
-    totalAlertas = sum(
-        modulo["alerta"] + modulo["critico"]
-        for modulo in modulosLista
-    )
+    moduloMaisUtilizado = max(modulosLista, key=lambda x: x["ativos"])
+
+    moduloMaisCritico = max(modulosLista, key=lambda x: (x["alerta"] + x["critico"]))
+
+    totalAlertas = sum(modulo["alerta"] + modulo["critico"] for modulo in modulosLista)
 
     totalCapturasSistema = len(df_modelo)
 
     estabilidadeGeral = max(
-        round(
-            100 - (
-                (totalAlertas / totalCapturasSistema)
-                * 100
-            ),
-            2
-        ),
-        0
+        round(100 - ((totalAlertas / totalCapturasSistema) * 100), 2), 0
     )
 
     meta = 80
 
-    metaAtual = max(
-        round(meta - estabilidadeGeral, 2),
-        0
-    )
+    metaAtual = max(round(meta - estabilidadeGeral, 2), 0)
 
     modulos_json = {
-
-        "modelo": {
-            "id": id_modelo,
-            "nome": nome_modelo
-        },
-
+        "modelo": {"id": id_modelo, "nome": nome_modelo},
         "ultimaAtualizacao": str(datetime.now()),
-
         "periodo": {
-
             "diasCaptura": diasCaptura,
-
             "inicio": str(primeiraCaptura),
-
-            "fim": str(ultimaCaptura)
+            "fim": str(ultimaCaptura),
         },
-
         "kpis": {
-
-            "moduloMaisUtilizado":
-                moduloMaisUtilizado["nome"],
-
-            "frequenciaMaisUtilizada":
-                moduloMaisUtilizado["usoPercentual"],
-
-            "moduloMaisCritico":
-                moduloMaisCritico["nome"],
-
-            "ocorrenciasCriticas":
-                (
-                    moduloMaisCritico["alerta"]
-                    +
-                    moduloMaisCritico["critico"]
-                ),
-
-            "estabilidadeGeral":
-                estabilidadeGeral,
-
-            "metaAtual":
-                metaAtual,
-
-            "meta":
-                meta
+            "moduloMaisUtilizado": moduloMaisUtilizado["nome"],
+            "frequenciaMaisUtilizada": moduloMaisUtilizado["usoPercentual"],
+            "moduloMaisCritico": moduloMaisCritico["nome"],
+            "ocorrenciasCriticas": (
+                moduloMaisCritico["alerta"] + moduloMaisCritico["critico"]
+            ),
+            "estabilidadeGeral": estabilidadeGeral,
+            "metaAtual": metaAtual,
+            "meta": meta,
         },
-
-        "modulos": modulosLista
+        "modulos": modulosLista,
     }
 
-    caminhoModelo = (
-        f"{base_path}"
-        f"modelos/"
-        f"modelo_{id_modelo}.json"
-    )
+    caminhoModelo = f"{base_path}" f"modelos/" f"modelo_{id_modelo}.json"
 
     s3.put_object(
         Bucket=bucket,
         Key=caminhoModelo,
-        Body=json.dumps(
-            modulos_json,
-            ensure_ascii=False,
-            indent=4
-        ),
-        ContentType="application/json"
+        Body=json.dumps(modulos_json, ensure_ascii=False, indent=4),
+        ContentType="application/json",
     )
 
     # ========== FIM DA DASH DO PEDRO SOUSA ==========
@@ -1081,6 +1175,7 @@ def client(df, cursor):
 
     arquivoExisteUnidade = s3.list_objects_v2(Bucket=bucket, Prefix=caminhoJsonUnidade)
 
+
     if "Contents" in arquivoExisteUnidade:
         respostaUnidade = s3.get_object(Bucket=bucket, Key=caminhoJsonUnidade)
         jsonUnidade = json.loads(respostaUnidade["Body"].read().decode("utf-8"))
@@ -1113,6 +1208,7 @@ def client(df, cursor):
         "ultimaAtualizacao": horarioFim
     }
 
+    jsonUnidade["ultimaAtualizacao"] = dataAtual.strftime("%Y-%m-%d %H:%M:%S")
 
     total = 0
     ativos = 0
@@ -1149,7 +1245,7 @@ def client(df, cursor):
         usoRedeUnidade += float(mon.get("redeAtual", mon.get("rede", 0)) or 0)
 
         if mon["tempoUsoHoras"] >= 12:
-            acima12+= 1
+            acima12 += 1
             jsonUnidade["monitoresAltoTempoUso"].append(mon)
 
         if mon["statusGeral"] == "Alerta" or mon["statusGeral"] == "Crítico":
@@ -1161,7 +1257,7 @@ def client(df, cursor):
         if mon["ram"] > maiorRam:
             maiorRam = mon["ram"]
 
-        if mon["disco"] >maiorDisco:
+        if mon["disco"] > maiorDisco:
             maiorDisco = mon["disco"]
 
     if rede_total_unidade and rede_total_unidade > 0:
@@ -1181,7 +1277,7 @@ def client(df, cursor):
     jsonUnidade["monitoresAltoTempoUso"] = sorted(
         jsonUnidade["monitoresAltoTempoUso"],
         key=lambda x: x["tempoUsoHoras"],
-        reverse=True
+        reverse=True,
     )
 
     jsonUnidade["monitoresConsumoRede"] = sorted(
@@ -1236,10 +1332,11 @@ def client(df, cursor):
 
     jsonUnidade["redeTotalMbps"] = rede_total_unidade
     
+
     jsonUnidade["recursos"] = {
         "cpu": {"pico": maiorCpu},
         "ram": {"pico": maiorRam},
-        "disco": {"pico": maiorDisco}
+        "disco": {"pico": maiorDisco},
     }
 
     jsonUnidade["ultimaAtualizacao"] = dataAtual.strftime("%Y-%m-%d %H:%M:%S")
@@ -1248,93 +1345,77 @@ def client(df, cursor):
         Bucket=bucket,
         Key=caminhoJsonUnidade,
         Body=json.dumps(jsonUnidade, ensure_ascii=False),
-        ContentType="application/json"
+        ContentType="application/json",
     )
+
+    s3.put_object(
+        Bucket=bucket,
+        Key=caminhoJsonUnidade,
+        Body=json.dumps(jsonUnidade, ensure_ascii=False),
+        ContentType="application/json",
+    )
+
 
     # ---------------------------fim dash Gustavo -------------------------------------------------------------------------------
 
-
-
     ########################################### Dash Maria:
+    caminhoJsonMonitor = f"{caminho_monitor}"
 
-    caminhoJsonMonitor = caminho_monitor
-     
-    #dataAtual = datetime.now()
-    #semanaAtual = dataAtual.isocalendar()[1]  # Pega o número da semana do ano
-#
-    ## Contagem de alertas na última semana
-    #ultimaSemana = dataAtual - timedelta(days=7)
-    #df_semana = df_client[df_client["timestamp"] >= ultimaSemana].copy()
-#
-    #alertasCpu = int(
-    #    (
-    #        df_semana["cpu_percent"].apply(lambda x: status(x, limite_cpu, "cpu"))
-    #        == "Alerta"
-    #    ).sum()
-    #)
-    #alertasRam = int(
-    #    (
-    #        df_semana["ram_percent"].apply(lambda x: status(x, limite_ram, "ram"))
-    #        == "Alerta"
-    #    ).sum()
-    #)
-    #alertasDisco = int(
-    #    (
-    #        df_semana["disk_used"].apply(lambda x: status(x, limite_disk, "disco"))
-    #        == "Alerta"
-    #    ).sum()
-    #)
-    #alertasRede = int(
-    #    (
-    #        df_semana["banda_larga"].apply(lambda x: status(x, limite_rede, "rede"))
-    #        == "Alerta"
-    #    ).sum()
-    #)
-#
-    ## A função lambda é para: a cada x valor capturado, se for do status Alerta, gere um alerta comum
-#
-    #criticosCPU = (
-    #    df_semana["cpu_percent"].apply(lambda x: status(x, limite_cpu, "cpu"))
-    #    == "Crítico"
-    #).sum()
-    #criticosRAM = (
-    #    df_semana["ram_percent"].apply(lambda x: status(x, limite_ram, "ram"))
-    #    == "Crítico"
-    #).sum()
-    #criticosDisco = (
-    #    df_semana["disk_used"].apply(lambda x: status(x, limite_disk, "disco"))
-    #    == "Crítico"
-    #).sum()
-    #criticosRede = (
-    #    df_semana["banda_larga"].apply(lambda x: status(x, limite_rede, "rede"))
-    #    == "Crítico"
-    #).sum()
-    #criticos = int(criticosCPU + criticosRAM + criticosDisco + criticosRede)
-#
+    alertasCpu = 0
+    alertasRam = 0
+    alertasDisco = 0
+    alertasRede = 0
+
+    usoDiscoPercent = diskUsed * 100 / diskTotal
+    usoDiscoPercentForm = round(usoDiscoPercent, 2)
+
+    if df_client["cpu_percent"].iloc[-1] > limite_cpu:
+        alertasCpu += 1
+
+    if df_client["ram_percent"].iloc[-1] > limite_ram:
+        alertasRam += 1
+
+    if rede > limite_rede:
+        alertasRede += 1
+
+    if usoDiscoPercent > limite_disk:
+        alertasDisco += 1
+
+    totalAlertas = alertasCpu + alertasRam + alertasDisco + alertasRede
+
+    print("Alertas totais do monitor: ", totalAlertas)
+
+    # Gráficos
+    valoresCpu = df_client["cpu_percent"].tail(10).tolist()
+    valorRam = df_client["ram_percent"].tail(10).tolist()
+    valorRede = df_client["banda_larga"].tail(10).tolist()
+    horariosGrafico = df_client["timestamp"].tail(10).dt.strftime("%H:%M").tolist()
+
     arquivoExiste = s3.list_objects_v2(Bucket=bucket, Prefix=caminhoJsonMonitor)
 
     if "Contents" in arquivoExiste:  # Se retornar "Contents" ele já existe
         respostaS3 = s3.get_object(Bucket=bucket, Key=caminhoJsonMonitor)
         jsonMonitor = json.loads(respostaS3["Body"].read().decode("utf-8"))
 
-        ultimaAtualizacao = (
-            df_client["timestamp"]
-        )
-        #semanaPassada = ultimaAtualizacao.isocalendar()[1]
+        ultimaAtualizacao = df_client["timestamp"]
 
     else:
         jsonMonitor = {
             "id": id_monitor,
             "ativo": monitor_ativo,
             "horario": horarioFim,
-            "qtdAlertasCriticos": criticos,
             "cpu": {
                 "usoCpuPercent": df_client["cpu_percent"].iloc[-1],
                 "cpuPico": cpu,
             },
             "ram": {"usoRamPercent": df_client["ram_percent"].iloc[-1], "ramPico": ram},
-            "disco": {"diskUsed": diskUsed, "diskTotal": diskTotal},
+            "disco": {
+                "diskUsed": diskUsed,
+                "diskTotal": diskTotal,
+                "usoPercentualDisco": usoDiscoPercentForm,
+            },
             "rede": {
+                "picoMbs": rede,
                 "upload": upload,
                 "download": download,
                 "trafegoTotal": trafego_total,
@@ -1346,6 +1427,19 @@ def client(df, cursor):
                 "limiteRede": limite_rede,
             },
             "modulos": {col: ultimo[col] for col in status_cols},
+            "alertasMonitor": {
+                "alertasCpu": alertasCpu,
+                "alertasRam": alertasRam,
+                "alertasDisco": alertasDisco,
+                "alertasRede": alertasRede,
+                "alertasTotais": totalAlertas,
+            },
+            "graficos": {
+                "valoresCpu": valoresCpu,
+                "valorRam": valorRam,
+                "valorRede": valorRede,
+                "horariosGrafico": horariosGrafico
+                },
         }
 
     s3.put_object(
