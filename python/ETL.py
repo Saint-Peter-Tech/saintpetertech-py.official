@@ -433,7 +433,7 @@ def client(df, cursor):
 
     salvar_s3(f"{base_path}controle.json", controle_json, tipo="json")
 
-        # ======= DASHBOARD DIEGO SEITI ========
+   # ======= DASHBOARD DIEGO SEITI ========
 
     caminhoJsonModelos = (f"client/" f"empresa_{hierarquia['id_empresa']}/" f"modelos/modelos.json")
 
@@ -471,17 +471,25 @@ def client(df, cursor):
         == "Crítico"
     ).sum()
 
-    alertasCpuTotais = alertasCpu + criticosCPU
-    alertasRamTotais = alertasRam + criticosRAM
-    alertasRedeTotais = alertasRede + criticosRede
+    status_cpu = df_client["cpu_percent"].apply(
+        lambda x: status(x, limite_cpu, "cpu")
+    )
 
-    acimaLimiteCpu = alertasCpuTotais * 100 / capturasTotais
-    acimaLimiteRam = alertasRamTotais * 100 / capturasTotais
-    acimaLimiteRede = alertasRedeTotais * 100 / capturasTotais
+    status_ram = df_client["ram_percent"].apply(
+        lambda x: status(x, limite_ram, "ram")
+    )
 
-    healthScore = 100 - (alertasCpu * 0.15) - (criticosCPU * 0.40) - (alertasRam * 0.10) - (criticosRAM * 0.25) - (alertasRede * 0.35) - (criticosRede * 0.80)
+    status_rede = df_client["banda_larga"].apply(
+        lambda x: status(x, limite_rede, "rede")
+    )
 
-    capturasTotais = len(df_client)
+    linhas_com_alerta = (
+        (status_cpu != "OK")
+        | (status_ram != "OK")
+        | (status_rede != "OK")
+    )
+
+    qtdCapturasAlerta = int(linhas_com_alerta.sum())
 
     try:
 
@@ -510,15 +518,32 @@ def client(df, cursor):
             "nome": hierarquia["modelo"],
 
             "capturas_totais": 0,
+            "capturas_alertas": 0,
+            "pct_alertas": 0,
 
             "alertas_cpu": 0,
             "criticos_cpu": 0,
+            "pct_alertas_cpu": 0,
+            "pct_criticos_cpu": 0,
+            "pct_ok_cpu": 0,
+            "origem_alertas_cpu": 0,
+            "healthscore_cpu": 100,
 
             "alertas_ram": 0,
             "criticos_ram": 0,
+            "pct_alertas_ram": 0,
+            "pct_criticos_ram": 0,
+            "pct_ok_ram": 0,
+            "origem_alertas_ram": 0,
+            "healthscore_cpu": 100,
 
             "alertas_rede": 0,
             "criticos_rede": 0,
+            "pct_alertas_rede": 0,
+            "pct_criticos_rede": 0,
+            "pct_ok_rede": 0,
+            "origem_alertas_rede": 0,
+            "healthscore_cpu": 100,
 
             "cpu_acima_limite": 0,
             "ram_acima_limite": 0,
@@ -530,6 +555,11 @@ def client(df, cursor):
     modelo = jsonModelos["modelos"][idModelo]
 
     modelo["capturas_totais"] += capturasTotais
+    modelo["capturas_alertas"] += qtdCapturasAlerta
+    modelo["pct_alertas"] = round(
+        modelo["capturas_alertas"] * 100 / modelo["capturas_totais"],
+        2
+    )
 
     modelo["alertas_cpu"] += int(alertasCpu)
     modelo["criticos_cpu"] += int(criticosCPU)
@@ -596,19 +626,45 @@ def client(df, cursor):
         modelo["criticos_rede"] * 100
     ) / totalCapturas
 
+    healthScoreCpu = (100 - (pctAlertaCpu + 2 * pctCriticoCpu))
+    healthScoreRam = (100 - (pctAlertaRam + 2 * pctCriticoRam))
+    healthScoreRede = (100 - (pctAlertaRede + 2 * pctCriticoRede))
+
+    modelo["healthscore_cpu"] = round(max(0, min(100, healthScoreCpu)), 2)
+    modelo["healthscore_ram"] = round(max(0, min(100, healthScoreRam)), 2)
+    modelo["healthscore_rede"] = round(max(0, min(100, healthScoreRede)), 2)
+
     healthScore = (
-        100
-        - (pctAlertaCpu * 0.15)
-        - (pctCriticoCpu * 0.40)
-        - (pctAlertaRam * 0.10)
-        - (pctCriticoRam * 0.25)
-        - (pctAlertaRede * 0.35)
-        - (pctCriticoRede * 0.80)
+        + (modelo["healthscore_cpu"] * 0.25)
+        + (modelo["healthscore_ram"] * 0.25)
+        + (modelo["healthscore_rede"] * 0.5)
     )
 
     modelo["healthscore"] = round(
         max(0, min(100, healthScore)),
         2
+    )
+
+    modelo["pct_alertas_cpu"] = round(pctAlertaCpu, 1)
+    modelo["pct_criticos_cpu"] = round(pctCriticoCpu, 1)
+    modelo["pct_ok_cpu"] = 100 - (modelo["pct_alertas_cpu"] + modelo["pct_criticos_cpu"])
+    modelo["pct_alertas_ram"] = round(pctAlertaRam, 1)
+    modelo["pct_criticos_ram"] = round(pctCriticoRam, 1)
+    modelo["pct_ok_ram"] = 100 - (modelo["pct_alertas_ram"] + modelo["pct_criticos_ram"])
+    modelo["pct_alertas_rede"] = round(pctAlertaRede, 1)
+    modelo["pct_criticos_rede"] = round(pctCriticoRede, 1)
+    modelo["pct_ok_rede"] = 100 - (modelo["pct_alertas_rede"] + modelo["pct_criticos_rede"])
+
+    alertasTotais = totalCpu + totalRam + totalRede
+
+    modelo["origem_alertas_cpu"] = round(
+        totalCpu * 100 / alertasTotais, 2
+    )
+    modelo["origem_alertas_ram"] = round(
+        totalRam * 100 / alertasTotais, 2
+    )
+    modelo["origem_alertas_rede"] = round(
+        totalRede * 100 / alertasTotais, 2
     )
 
     s3.put_object(
@@ -1210,7 +1266,7 @@ def client(df, cursor):
     if len(jsonUnidade["trafegoRede"]) > 30:
         jsonUnidade["trafegoRede"] = jsonUnidade["trafegoRede"][-30:]
 
-    jsonUnidade["redeTotalMbps"] = rede_total_unidade
+    # jsonUnidade["redeTotalMbps"] = rede_total_unidade
 
     jsonUnidade["recursos"] = {
         "cpu": {"pico": maiorCpu},
