@@ -456,14 +456,18 @@ try:
 
             n_ativos = len(atuais)
 
+            if n_ativos > 0:
+                bytes_sent_per_sec += n_ativos * random.uniform(15000, 60000)
+                bytes_recv_per_sec += n_ativos * random.uniform(30000, 120000)
+
             # Aumentando os valores para cada módulo ativo
 
             carga = peso_hora[datetime.now().hour] / 12.07
-            bytes_sent_per_sec = bytes_sent_per_sec * (1.0 - carga * 0.4)
-            bytes_recv_per_sec = bytes_recv_per_sec * (1.0 - carga * 0.4)
+            bytes_sent_per_sec = bytes_sent_per_sec * (1 + carga * 0.4)
+            bytes_recv_per_sec = bytes_recv_per_sec * (1 + carga * 0.4)
 
-            bytes_sent_per_sec = bytes_sent_per_sec / (1 + n_ativos * 3.0)
-            bytes_recv_per_sec = bytes_recv_per_sec / (1 + n_ativos * 3.0)
+            bytes_sent_per_sec = bytes_sent_per_sec * (1 + n_ativos * 0.1)
+            bytes_recv_per_sec = bytes_recv_per_sec * (1 + n_ativos * 0.1)
 
 
             ram += n_ativos * random.uniform(0.7, 1.5)
@@ -530,7 +534,7 @@ try:
 
             print("=" * 60)
 
-            time.sleep(60)
+            time.sleep(1)
             # Aguarda mais 60 segundos antes da próxima coleta (controle de frequência).
 
             contador += 1

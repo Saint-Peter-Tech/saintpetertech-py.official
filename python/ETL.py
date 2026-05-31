@@ -140,6 +140,18 @@ def buscar_hierarquia_monitor(cursor, id_monitor):
         "modelo": resultado[8]
     }
 
+def buscar_rede_total_unidade(cursor, id_unidade):
+    query = """
+        SELECT rede_total
+        FROM unidades
+        WHERE id_unidade = %s
+    """
+    cursor.execute(query, (id_unidade,))
+    resultado = cursor.fetchone()
+    if resultado:
+        return float(resultado[0])
+    return None
+
 def buscar_monitores_modelo(cursor, id_modelo):
 
     query = """
@@ -280,6 +292,8 @@ def client(df, cursor):
     id_hospital = hierarquia["id_hospital"]
     id_unidade = hierarquia["id_unidade"]
 
+    rede_total_unidade = buscar_rede_total_unidade(cursor, id_unidade)
+
     horarioInicio = str(df_client["timestamp"].min())
     horarioFim = str(df_client["timestamp"].max())
 
@@ -305,6 +319,7 @@ def client(df, cursor):
     rede = df_client["banda_larga"].max()
     minrede = df_client["banda_larga"].min()
     ultrede = df_client["banda_larga"].iloc[-1]
+    redeAtual = df_client["banda_larga"].iloc[-1]
 
     upload = df_client["upload_mbps"].max()
     download = df_client["download_mbps"].max()
@@ -1074,15 +1089,28 @@ def client(df, cursor):
             "id": id_unidade,
             "nome": hierarquia["unidade"],
             "listaMonitores": {},
-            "trafegoRede":[]
+            "trafegoRede": []
         }
 
+    jsonUnidade.setdefault("listaMonitores", {})
+    jsonUnidade.setdefault("trafegoRede", [])
+    jsonUnidade.setdefault("monitoresEmAlertaLista", [])
+    jsonUnidade.setdefault("monitoresAltoTempoUso", [])
+    jsonUnidade.setdefault("monitoresGargaloRede", [])
+    jsonUnidade.setdefault("monitoresConsumoRede", [])
+
     jsonUnidade["listaMonitores"][str(id_monitor)] = {
-        "id": id_monitor, "ativo": monitor_ativo,
+        "id": id_monitor,
+        "ativo": monitor_ativo,
         "statusGeral": statusgeral,
-        "tempoUsoHoras":round(intervalo / 60, 2),
-        "cpu": cpu, "ram": ram, "disco":diskUsed,
-        "rede": rede
+        "tempoUsoHoras": round(intervalo / 60, 2),
+        "cpu": cpu,
+        "ram": ram,
+        "disco": diskUsed,
+        "rede": redeAtual,
+        "redeAtual": redeAtual,
+        "redePico": rede,
+        "ultimaAtualizacao": horarioFim
     }
 
 
@@ -1092,8 +1120,12 @@ def client(df, cursor):
     criticos = 0
     somaTempo = 0
     acima12 = 0
+    gargaloRede = 0
+    usoRedeUnidade = 0 
     jsonUnidade["monitoresEmAlertaLista"] = []
     jsonUnidade["monitoresAltoTempoUso"] = []
+    jsonUnidade["monitoresGargaloRede"] = []
+    jsonUnidade["monitoresConsumoRede"] = [] 
     maiorCpu = 0
     maiorRam = 0
     maiorDisco = 0
@@ -1114,6 +1146,7 @@ def client(df, cursor):
             criticos += 1
 
         somaTempo += mon["tempoUsoHoras"]
+        usoRedeUnidade += float(mon.get("redeAtual", mon.get("rede", 0)) or 0)
 
         if mon["tempoUsoHoras"] >= 12:
             acima12+= 1
@@ -1131,11 +1164,33 @@ def client(df, cursor):
         if mon["disco"] >maiorDisco:
             maiorDisco = mon["disco"]
 
+    if rede_total_unidade and rede_total_unidade > 0:
+        usoRedePercentual = round((usoRedeUnidade / rede_total_unidade) * 100, 2)
+    else:
+        usoRedePercentual = 0
+
+    if usoRedePercentual >= 90:
+        gargaloRede = 1
+        jsonUnidade["monitoresGargaloRede"] = [
+            mon for mon in lista if float(mon.get("redeAtual", mon.get("rede", 0)) or 0) > 0
+        ]
+    else:
+        gargaloRede = 0
+        jsonUnidade["monitoresGargaloRede"] = []  
+
     jsonUnidade["monitoresAltoTempoUso"] = sorted(
         jsonUnidade["monitoresAltoTempoUso"],
         key=lambda x: x["tempoUsoHoras"],
         reverse=True
     )
+
+    jsonUnidade["monitoresConsumoRede"] = sorted(
+        lista,
+        key=lambda x: float(x.get("redeAtual", x.get("rede", 0)) or 0),
+        reverse=True
+    )
+
+    jsonUnidade["gargaloRede"] = gargaloRede
 
     if total > 0:
         mediaTempo = somaTempo / total
@@ -1160,11 +1215,24 @@ def client(df, cursor):
 
     jsonUnidade["trafegoRede"].append({
         "timestamp": horarioFim,
-        "trafegoMbps": float(df_client["banda_larga"].iloc[-1])
+        "trafegoMbps": round(usoRedeUnidade, 2),
+        "usoRedePercentual": usoRedePercentual
     })
 
     if len(jsonUnidade["trafegoRede"]) > 30:
         jsonUnidade["trafegoRede"] = jsonUnidade["trafegoRede"][-30:]
+
+
+    jsonUnidade["usoRedeMbps"] = round(usoRedeUnidade, 2)
+    jsonUnidade["usoRedePercentual"] = usoRedePercentual
+
+    if usoRedePercentual >= 90:
+        jsonUnidade["statusRedeUnidade"] = "Gargalo"
+    elif usoRedePercentual >= 70:
+        jsonUnidade["statusRedeUnidade"] = "Alerta"
+    else:
+        jsonUnidade["statusRedeUnidade"] = "OK"
+
 
     jsonUnidade["redeTotalMbps"] = rede_total_unidade
     
