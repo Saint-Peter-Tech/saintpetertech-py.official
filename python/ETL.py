@@ -1697,7 +1697,9 @@ def client(df, cursor):
 
     if usoDiscoPercent > limite_disk:
         alertasDisco += 1
-
+        
+    if rede <= 0:
+        alertasRede += 1
     totalAlertas = alertasCpu + alertasRam + alertasDisco + alertasRede
 
     print("Alertas totais do monitor: ", totalAlertas)
