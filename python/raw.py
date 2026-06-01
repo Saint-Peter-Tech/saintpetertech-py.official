@@ -518,6 +518,10 @@ try:
                 passou = cpu - 80
                 cpu = 80 + passou * 0.2
 
+            if random.random() < 0.05:
+                bytes_sent_per_sec = 0
+                bytes_recv_per_sec = 0
+
             # Cria uma lista com os dados coletados
             linha = [
                 id_monitor,

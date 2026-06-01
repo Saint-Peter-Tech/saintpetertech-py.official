@@ -1,3 +1,5 @@
 /python/venv/
 /python/.env
 /python/controle.txt
+.env
+*.env
