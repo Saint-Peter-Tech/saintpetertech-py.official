@@ -513,9 +513,9 @@ def trusted(df):
         print("Sem dados para trusted")
         return pd.DataFrame()
 
-    df["upload_mbps"] = (df["bytes_sent_per_sec"] * 8 / 1_000_000).round(4)
+    df["upload_mbps"] = (df["bytes_sent_per_sec"] / (1024 * 1024)).round(4)
 
-    df["download_mbps"] = (df["bytes_recv_per_sec"] * 8 / 1_000_000).round(4)
+    df["download_mbps"] = (df["bytes_recv_per_sec"] / (1024 * 1024)).round(4)
 
     df["banda_larga"] = (df["upload_mbps"] + df["download_mbps"]).round(4)
 
@@ -526,6 +526,8 @@ def trusted(df):
     df["disk_total"] = (df["disk_total"] / 1024**3).round(2)
 
     df["disk_percent"] = ((df["disk_used"] / df["disk_total"]) * 100).round(2)
+
+    df["atividade_rede"] = ( df["banda_larga"] > 0.01 )
 
     hoje = datetime.now()
 
@@ -627,16 +629,17 @@ def client(df, cursor):
         if componente in ["cpu", "ram", "disco"]:
             if valor <= limite:
                 return "OK"
-            if valor <= limite * 1.2:
+            if valor < (limite * 1.1):
                 return "Alerta"
-            return "Crítico"
+            else: 
+                return "Crítico"
 
         # Quanto menor pior, velocidade de rede rápida, está bom, quando estiver abaixo a rede fica lenta
         elif componente == "rede":
             if valor < 0.001:
                 return "Crítico"
 
-            elif valor > limite:
+            elif valor < limite:
                 return "Alerta"
 
             else:
@@ -1765,7 +1768,7 @@ def client(df, cursor):
         ContentType="application/json",
     )
 
-    print("CLIENT atualizado")
+    print("CLIENT:")
     print(f"Empresa: {id_empresa}")
     print(f"Hospital: {id_hospital}")
     print(f"Unidade: {id_unidade}")

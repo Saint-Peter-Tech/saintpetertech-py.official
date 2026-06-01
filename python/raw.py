@@ -387,6 +387,17 @@ def coletar_componentes(componentes):
 
     return dados
 
+def calcular_peso_hospital():
+    agora = datetime.now()
+
+    hora = agora.hour
+    dia_semana = agora.weekday()
+
+    peso_d = peso_dia[dia_semana] / 100
+    peso_h = peso_hora[hora] / 100
+
+    return (peso_d + peso_h) / 2
+
 try:
     while True:
         print("\nIniciando nova coleta de dados...")
@@ -456,18 +467,42 @@ try:
 
             n_ativos = len(atuais)
 
-            if n_ativos > 0:
-                bytes_sent_per_sec += n_ativos * random.uniform(15000, 60000)
-                bytes_recv_per_sec += n_ativos * random.uniform(30000, 120000)
-
             # Aumentando os valores para cada módulo ativo
 
-            carga = peso_hora[datetime.now().hour] / 12.07
-            bytes_sent_per_sec = bytes_sent_per_sec * (1 + carga * 0.4)
-            bytes_recv_per_sec = bytes_recv_per_sec * (1 + carga * 0.4)
+            trafego_modulos = {
+                "ecg": (300_000, 1_000_000),
+                "spo2": (150_000, 500_000),
+                "bpm": (100_000, 300_000),
+                "resp": (200_000, 600_000),
+                "temperatura": (50_000, 100_000),
+                "pa": (80_000, 200_000),
+                "etco2": (250_000, 800_000),
+                "pvc": (150_000, 400_000),
+                "pic": (300_000, 900_000),
+            }
 
-            bytes_sent_per_sec = bytes_sent_per_sec * (1 + n_ativos * 0.1)
-            bytes_recv_per_sec = bytes_recv_per_sec * (1 + n_ativos * 0.1)
+            extra_upload = 0
+            extra_download = 0
+
+            peso_total = calcular_peso_hospital()
+            fator_hospital = 0.3 + peso_total * 5
+
+            for modulo in atuais:
+
+                upload_base, download_base = trafego_modulos[modulo]
+
+                extra_upload += random.uniform(
+                    upload_base * 0.8,
+                    upload_base * 1.2
+                ) * fator_hospital
+
+                extra_download += random.uniform(
+                    download_base * 0.8,
+                    download_base * 1.2
+                ) * fator_hospital
+
+            bytes_sent_per_sec += extra_upload
+            bytes_recv_per_sec += extra_download
 
 
             ram += n_ativos * random.uniform(0.7, 1.5)
@@ -523,7 +558,7 @@ try:
             print(f"RAM         : {ram:.2f}%")
             print(f"DISCO       : {disk_used}bytes")
             print(f"DISCO TOTAL : {disk_total}bytes")
-            print(f"BROADBAND   : {redeTotal:.2f}mb/s")
+            print(f"BROADBAND   : {redeTotal:.2f}B/s")
 
             print("-" * 60)
 
