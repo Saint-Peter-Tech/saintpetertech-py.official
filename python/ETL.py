@@ -166,7 +166,7 @@ def buscar_quantidade_unidades(cursor, id_empresa):
 
     return lista_unidades
 
-def buscar_hospitais_5alertas(cursor, df, id_empresa, status_func, inicio, fim, minimo=5):
+def buscar_hospitais_5alertas(cursor, df, id_empresa, inicio, fim, minimo=5):
 
     cursor.execute(
         """
@@ -214,7 +214,7 @@ def buscar_hospitais_5alertas(cursor, df, id_empresa, status_func, inicio, fim, 
             continue
         limites = limites_por_monitor.get(int(row["id_monitor"]), {})
         for coluna, (chave_limite, tipo) in mapa.items():
-            if status_func(row[coluna], limites.get(chave_limite), tipo) == "Alerta":
+            if status(row[coluna], limites.get(chave_limite), tipo) in ("Alerta", "Crítico"):
                 alertas_por_hospital[id_hospital] = alertas_por_hospital.get(id_hospital, 0) + 1
 
     resultado = [
@@ -284,7 +284,7 @@ def heatmap_quedas(cursor, df_hist, id_empresa, dias=30, limite_queda=0.01):
         }
     return resultado
 
-def barras_alertas_semana(cursor, df_hist, id_empresa, status_func):
+def barras_alertas_semana(cursor, df_hist, id_empresa):
     """
     Alertas (status == "Alerta") por semana do mês corrente, por unidade.
     Chave "0" = todas as unidades.
@@ -345,7 +345,7 @@ def barras_alertas_semana(cursor, df_hist, id_empresa, status_func):
 
         qtd = 0
         for coluna, (chave_limite, tipo) in mapa.items():
-            if status_func(row[coluna], limites.get(chave_limite), tipo) == "Alerta":
+            if status(row[coluna], limites.get(chave_limite), tipo) in ("Alerta", "Crítico"):
                 qtd += 1
         if qtd:
             alertas[uid][semana] = alertas[uid].get(semana, 0) + qtd
@@ -504,6 +504,33 @@ def salvar_s3(caminho, novo_dado, tipo="json"):
         s3.put_object(Bucket=bucket, Key=caminho, Body=buffer.getvalue())
 
 
+def status(valor, limite, componente):
+    if limite is None:
+        return "Sem limite definido"
+
+    # Quanto maior pior
+    if componente in ["cpu", "ram", "disco"]:
+        if valor <= limite:
+            return "OK"
+        if valor < (limite * 1.1):
+            return "Alerta"
+        else:
+            return "Crítico"
+
+    # Quanto menor pior, velocidade de rede rápida, está bom, quando estiver abaixo a rede fica lenta
+    elif componente == "rede":
+        if valor < 0.001:
+            return "Crítico"
+
+        elif valor < limite:
+            return "Alerta"
+
+        else:
+            return "OK"
+
+    return "OK"
+
+
 def trusted(df):
     print("Processando camada TRUSTED...")
 
@@ -621,32 +648,6 @@ def client(df, cursor):
 
     kpi_rede_zero = (df_client["banda_larga"] <= 0.01).sum()
 
-    def status(valor, limite, componente):
-        if limite is None:
-            return "Sem limite definido"
-
-        # Quanto maior pior
-        if componente in ["cpu", "ram", "disco"]:
-            if valor <= limite:
-                return "OK"
-            if valor < (limite * 1.1):
-                return "Alerta"
-            else: 
-                return "Crítico"
-
-        # Quanto menor pior, velocidade de rede rápida, está bom, quando estiver abaixo a rede fica lenta
-        elif componente == "rede":
-            if valor < 0.001:
-                return "Crítico"
-
-            elif valor < limite:
-                return "Alerta"
-
-            else:
-                return "OK"
-
-        return "OK"
-
     limite_cpu = limites.get("cpu")
     limite_ram = limites.get("ram")
     limite_disk = limites.get("disco_usado")
@@ -735,11 +736,11 @@ def client(df, cursor):
     ranking_quedas = buscar_unidades_quedas(cursor, df_hist, id_empresa, ini_semana, agora)
     unidade_top = ranking_quedas[0] if ranking_quedas else {"nome_unidade": "Nenhuma", "qtdQuedas": 0}
 
-    lista_hoje, total_hoje  = buscar_hospitais_5alertas(cursor, df_hist, id_empresa, status, ini_hoje, agora)
-    _,          total_ontem = buscar_hospitais_5alertas(cursor, df_hist, id_empresa, status, ini_ontem, ini_hoje)
+    lista_hoje, total_hoje  = buscar_hospitais_5alertas(cursor, df_hist, id_empresa, ini_hoje, agora)
+    _,          total_ontem = buscar_hospitais_5alertas(cursor, df_hist, id_empresa, ini_ontem, ini_hoje)
 
     heatmap = heatmap_quedas(cursor, df_hist, id_empresa, dias=30)
-    barras  = barras_alertas_semana(cursor, df_hist, id_empresa, status)
+    barras  = barras_alertas_semana(cursor, df_hist, id_empresa)
 
     controle_json = {
         "empresa": {"id": id_empresa, "nome": hierarquia["empresa"]},
